@@ -1,0 +1,108 @@
+[](https://docs.expo.dev/deploy/<https:/expo.dev>)[Docs](https://docs.expo.dev/deploy/</>)
+[Blog](https://docs.expo.dev/deploy/<https:/expo.dev/blog>)[Changelog](https://docs.expo.dev/deploy/<https:/expo.dev/changelog>)[Star Us on GitHub](https://docs.expo.dev/deploy/<https:/github.com/expo/expo>)[](https://docs.expo.dev/deploy/<https:/github.com/expo/expo>)
+Auto
+Search
+`Ctrl` `K`
+[Home](https://docs.expo.dev/deploy/</>)[Guides](https://docs.expo.dev/deploy/</guides/overview>)[EAS](https://docs.expo.dev/deploy/</eas>)[Reference](https://docs.expo.dev/deploy/</versions/latest>)[Learn](https://docs.expo.dev/deploy/</tutorial/overview>)
+Get started
+[Introduction](https://docs.expo.dev/deploy/</get-started/introduction>)[Create a project](https://docs.expo.dev/deploy/</get-started/create-a-project>)[Set up your environment](https://docs.expo.dev/deploy/</get-started/set-up-your-environment>)[Start developing](https://docs.expo.dev/deploy/</get-started/start-developing>)[Next steps](https://docs.expo.dev/deploy/</get-started/next-steps>)
+Develop
+[Tools for development](https://docs.expo.dev/deploy/</develop/tools>)
+Navigation
+User interface
+Development builds
+Config plugins
+Debugging
+[Authentication](https://docs.expo.dev/deploy/</develop/authentication>)[Unit testing](https://docs.expo.dev/deploy/</develop/unit-testing>)
+Review
+[Distributing apps for review](https://docs.expo.dev/deploy/</review/overview>)[Share previews with your team](https://docs.expo.dev/deploy/</review/share-previews-with-your-team>)[Open updates with Orbit](https://docs.expo.dev/deploy/</review/with-orbit>)
+Deploy
+[Build project for app stores](https://docs.expo.dev/deploy/</deploy/build-project>)[Submit to app stores](https://docs.expo.dev/deploy/</deploy/submit-to-app-stores>)[App stores metadata](https://docs.expo.dev/deploy/</deploy/app-stores-metadata>)[Send over-the-air updates](https://docs.expo.dev/deploy/</deploy/send-over-the-air-updates>)
+Monitor
+[Monitoring services](https://docs.expo.dev/deploy/</monitoring/services>)
+More
+[Core concepts](https://docs.expo.dev/deploy/</core-concepts>)[FAQ](https://docs.expo.dev/deploy/</faq>)
+[Archive](https://docs.expo.dev/deploy/</archive>)[Expo Snack](https://docs.expo.dev/deploy/<https:/snack.expo.dev>)[Discord and Forums](https://docs.expo.dev/deploy/<https:/chat.expo.dev>)[Newsletter](https://docs.expo.dev/deploy/<https:/expo.dev/mailing-list/signup>)
+# Build your project for app stores
+[Edit this page](https://docs.expo.dev/deploy/<https:/github.com/expo/expo/edit/main/docs/pages/deploy/build-project.mdx> "Edit content of this page on GitHub")
+Learn how to create a production build for your app that is ready to be submitted to app stores from the command line using EAS Build.
+[Edit this page](https://docs.expo.dev/deploy/<https:/github.com/expo/expo/edit/main/docs/pages/deploy/build-project.mdx> "Edit content of this page on GitHub")
+Whether you have built a native app binary using [EAS](https://docs.expo.dev/deploy/</build/setup>) or [locally](https://docs.expo.dev/deploy/</guides/local-app-development>), the next step in your app development journey is to submit your app to the stores. To do so, you need to create a production build.
+Production builds are submitted to app stores for release to the general public or as part of a store-facilitated testing process such as TestFlight. This guide explains how to create production builds with [EAS](https://docs.expo.dev/deploy/</deploy/build-project#production-builds-using-eas>) and [locally](https://docs.expo.dev/deploy/</deploy/build-project#production-builds-locally>). It is also possible to create production builds for Expo apps with any CI service capable of compiling Android and iOS apps.
+## Production builds using EAS[](https://docs.expo.dev/deploy/<#production-builds-using-eas>)
+Production builds must be installed through their respective app stores. You cannot install them directly on your Android Emulator, iOS Emulator, or device. The only exception to this is if you explicitly set `"buildType": "apk"` for Android on your build profile. However, it is recommended to use aab when submitting to stores, and this is the default configuration.
+### `eas.json` configuration[](https://docs.expo.dev/deploy/<#easjson-configuration>)
+A minimal configuration for building a production build in eas.json is already created when you create your first build:
+eas.json
+Copy
+```
+{
+ "build": {
+  %%placeholder-start%%... %%placeholder-end%%
+  "production": {}
+  %%placeholder-start%%... %%placeholder-end%%
+ }
+}
+
+```
+
+### Create a production build[](https://docs.expo.dev/deploy/<#create-a-production-build>)
+To create a production build, run the following command for a platform:
+Android
+iOS
+Terminal
+Copy
+`- ``eas build --platform android`
+Terminal
+Copy
+`- ``eas build --platform ios`
+You can attach a message to the build by passing `--message` to the build command, for example, `eas build --platform ios --message "Some message"`. The message will appear on the Expo dashboard. It comes in handy when you want to specify the purpose of the build for your team.
+Alternatively, you can use `--platform all` option to build for Android and iOS at the same time:
+Terminal
+Copy
+`- ``eas build --platform all`
+## Developer account[](https://docs.expo.dev/deploy/<#developer-account>)
+You will need to have a developer account for the app store you want to submit your app.
+Google Play Developer membership is required to distribute to the Google Play Store.[](https://docs.expo.dev/deploy/<#google-play-developer-membership-is-required-to>)
+You can build and sign your app using EAS Build, but you can't upload it to the Google Play Store unless you have a membership, a one-time $25 USD fee.
+Apple Developer Program membership is required to build for the Apple App Store.[](https://docs.expo.dev/deploy/<#apple-developer-program-membership-is-required-to>)
+If you are going to use EAS Build to create production builds for the Apple App Store, you need access to an account with a $99 USD [Apple Developer Program](https://docs.expo.dev/deploy/<https:/developer.apple.com/programs>) membership.
+## App signing credentials[](https://docs.expo.dev/deploy/<#app-signing-credentials>)
+Before the build process can start for app stores, you need a store developer account and generate or provide app signing credentials.
+Whether you have experience with generating app signing credentials or not, EAS CLI can do the heavy lifting. You can opt-in for EAS CLI to handle the app signing credentials process.
+### Android app signing credentials[](https://docs.expo.dev/deploy/<#android-app-signing-credentials>)
+  * If you have not yet generated a keystore for your app, use EAS CLI by selecting `Generate new keystore`, and then you are done. The keystore is stored securely on EAS servers.
+  * If you want to manually generate your keystore, see the [manual Android credentials guide](https://docs.expo.dev/deploy/</app-signing/local-credentials#android-credentials>) for more information.
+
+
+### iOS app signing credentials[](https://docs.expo.dev/deploy/<#ios-app-signing-credentials>)
+  * If you have not generated a provisioning profile and/or distribution certificate yet, use EAS CLI by signing in to your Apple Developer Program account and following the prompts.
+  * If you want to manually generate your credentials, see the [manual iOS credentials guide](https://docs.expo.dev/deploy/</app-signing/local-credentials#ios-credentials>) for more information.
+
+
+## Wait for the build to complete[](https://docs.expo.dev/deploy/<#wait-for-the-build-to-complete>)
+By default, the `eas build` command will wait for your build to complete, but you can interrupt it if you prefer not to wait. Instead, use the builds details page link prompted by EAS CLI to monitor the build progress and read the build logs. You can also find this page by visiting [your build dashboard](https://docs.expo.dev/deploy/<https:/expo.dev/builds>) or running the following command:
+Terminal
+Copy
+`- ``eas build:list`
+If you are a member of an organization and your build is on its behalf, you will find the build details on [the build dashboard for that account](https://docs.expo.dev/deploy/<https:/expo.dev/accounts/%5Baccount%5D/builds>).
+## Production builds locally[](https://docs.expo.dev/deploy/<#production-builds-locally>)
+To create a production build locally, see the following React Native guides for more information on the necessary steps for Android and iOS.
+These guides assume your project has android and/or ios directories containing the respective native projects. If you use [Continuous Native Generation](https://docs.expo.dev/deploy/</workflow/continuous-native-generation>) then you will need to run [prebuild](https://docs.expo.dev/deploy/</workflow/prebuild>) to generate the directories before following the guides.
+> Note: Following the guide below, in step four, when you build the release .aab for Android, run `./gradlew app:bundleRelease` from the android directory instead of `npx react-native build-android --mode=release`.
+[Publishing to Google Play StoreLearn how to publish an app to Google Play Store by following the necessary steps manually.](https://docs.expo.dev/deploy/<https:/reactnative.dev/docs/signed-apk-android>) [Publishing to Apple App StoreLearn how to publish an app to Apple App Store by following the necessary steps manually.](https://docs.expo.dev/deploy/<https:/reactnative.dev/docs/publishing-to-app-store>)
+## Next step[](https://docs.expo.dev/deploy/<#next-step>)
+[App stores best practicesLearn about the best practices for submitting your app to app stores.](https://docs.expo.dev/deploy/</distribution/app-stores>)
+[Previous (Review)Open updates with Orbit](https://docs.expo.dev/deploy/</review/with-orbit>)[Next (Deploy)Submit to app stores](https://docs.expo.dev/deploy/</deploy/submit-to-app-stores>)
+Was this doc helpful?
+  * Share your feedback
+  * [Ask a question on the forums](https://docs.expo.dev/deploy/<https:/chat.expo.dev/>)
+  * [Edit this page](https://docs.expo.dev/deploy/<https:/github.com/expo/expo/edit/main/docs/pages/deploy/build-project.mdx>)
+  * Last updated on October 01, 2024
+
+
+Sign up for the Expo Newsletter
+Sign Up
+Unsubscribe at any time. Read our [privacy policy](https://docs.expo.dev/deploy/<https:/expo.dev/privacy>).
+On this page
+[Production builds using EAS](https://docs.expo.dev/deploy/</deploy/build-project/#production-builds-using-eas>)[eas.json configuration](https://docs.expo.dev/deploy/</deploy/build-project/#easjson-configuration>)[Create a production build](https://docs.expo.dev/deploy/</deploy/build-project/#create-a-production-build>)[Developer account](https://docs.expo.dev/deploy/</deploy/build-project/#developer-account>)[App signing credentials](https://docs.expo.dev/deploy/</deploy/build-project/#app-signing-credentials>)[Android app signing credentials](https://docs.expo.dev/deploy/</deploy/build-project/#android-app-signing-credentials>)[iOS app signing credentials](https://docs.expo.dev/deploy/</deploy/build-project/#ios-app-signing-credentials>)[Wait for the build to complete](https://docs.expo.dev/deploy/</deploy/build-project/#wait-for-the-build-to-complete>)[Production builds locally](https://docs.expo.dev/deploy/</deploy/build-project/#production-builds-locally>)[Next step](https://docs.expo.dev/deploy/</deploy/build-project/#next-step>)

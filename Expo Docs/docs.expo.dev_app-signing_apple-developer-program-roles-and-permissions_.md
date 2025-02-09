@@ -1,0 +1,95 @@
+[](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/expo.dev>)[Docs](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</>)
+[Blog](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/expo.dev/blog>)[Changelog](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/expo.dev/changelog>)[Star Us on GitHub](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/github.com/expo/expo>)[](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/github.com/expo/expo>)
+Auto
+Search
+`Ctrl` `K`
+[Home](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</>)[Guides](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</guides/overview>)[EAS](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas>)[Reference](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</versions/latest>)[Learn](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</tutorial/overview>)
+[Introduction](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas>)[Environment variables](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/environment-variables>)[Environment variables usage](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/using-environment-variables>)
+EAS Workflows
+[Get started](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas-workflows/get-started>)[Triggers](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas-workflows/triggers>)[Jobs](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas-workflows/jobs>)[Control flow](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas-workflows/control-flow>)[Variables](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas-workflows/variables>)
+EAS Build
+[Introduction](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</build/introduction>)[Create your first build](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</build/setup>)[Configure with eas.json](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</build/eas-json>)[Internal distribution](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</build/internal-distribution>)[Automate submissions](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</build/automate-submissions>)[Using EAS Update](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</build/updates>)[Trigger builds from CI](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</build/building-on-ci>)[Trigger builds from GitHub App](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</build/building-from-github>)[Expo Orbit](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</build/orbit>)
+App Signing
+[App credentials](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/app-credentials>)[Automatically managed credentials](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/managed-credentials>)[Local credentials](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/local-credentials>)[Existing credentials](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/existing-credentials>)[Sync credentials between remote and local sources](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/syncing-credentials>)[Security](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/security>)[Apple Developer Program roles and permissions](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/apple-developer-program-roles-and-permissions>)
+Custom builds
+Reference
+EAS Hosting
+[Introduction](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/hosting/introduction>)[Get started](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/hosting/get-started>)[Deployments and aliases](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/hosting/deployments-and-aliases>)[Environment variables](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/hosting/environment-variables>)[Custom domain](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/hosting/custom-domain>)[Monitoring API routes](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/hosting/api-routes>)[Workflows](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/hosting/workflows>)
+Reference
+EAS Submit
+[Introduction](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</submit/introduction>)[Configure with eas.json](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</submit/eas-json>)[Submit to Google](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</submit/android>)[Submit to Apple](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</submit/ios>)
+EAS Update
+[Introduction](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas-update/introduction>)[Get started](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas-update/getting-started>)
+Preview
+Deployment
+Concepts
+Troubleshooting
+Reference
+EAS Metadata
+[Introduction](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/metadata>)[Get started](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/metadata/getting-started>)
+Reference
+EAS Insights
+[Introduction](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas-insights/introduction>)
+Distribution
+[Overview](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</distribution/introduction>)[App stores best practices](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</distribution/app-stores>)[App transfers](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</distribution/app-transfers>)[Understanding app size](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</distribution/app-size>)
+Reference
+[eas.json](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/json>)[Webhooks](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</eas/webhooks>)
+Expo accounts
+Billing
+[Archive](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</archive>)[Expo Snack](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/snack.expo.dev>)[Discord and Forums](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/chat.expo.dev>)[Newsletter](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/expo.dev/mailing-list/signup>)
+# Apple Developer Program roles and permissions for EAS Build
+[Edit this page](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/github.com/expo/expo/edit/main/docs/pages/app-signing/apple-developer-program-roles-and-permissions.mdx> "Edit content of this page on GitHub")
+Learn about the Apple Developer account membership requirements for creating an EAS Build.
+[Edit this page](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/github.com/expo/expo/edit/main/docs/pages/app-signing/apple-developer-program-roles-and-permissions.mdx> "Edit content of this page on GitHub")
+An Apple Developer account with permissions to create [app signing credentials](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/managed-credentials#generating-app-signing-credentials>), such as certificates, identifiers, and provisioning profiles, is required when using EAS Build to create iOS device builds. These credentials can be generated when submitting the build by logging into your Apple Account from the EAS CLI, or they can be uploaded to your Expo account by an authorized user, so users without Apple Developer account access can create builds using the uploaded credentials.
+On individual Apple Developer accounts, only the Account Holder role can generate app signing credentials. On an organization Apple Developer account, the Account Holder and Admin roles can always generate app signing credentials, and the App Manager role can generate credentials when a user with this role has Access to Certificates, Identifiers, and Profiles enabled in their App Store Connect user permissions.
+![Access to Certificates, Identifiers, and Profiles settings in App Store Connect.](https://docs.expo.dev/static/images/apple-access-settings.png)Access to Certificates, Identifiers, and Profiles settings in App Store Connect.
+This guide provides steps that an authorized user can follow to ensure app signing credentials are generated and available to their team members who use EAS. It also provides steps for the team developer to create an EAS Build by using pre-generated credentials.
+> See [Apple's documentation on Program Roles](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/developer.apple.com/support/roles/>) for details on the different roles and their permissions based on the type of Developer account and the permissions that are required for each role.
+## Steps for Apple Developer account's authorized user[](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<#steps-for-apple-developer-accounts-authorized-user>)
+The authorized user of the Apple Developer account needs to generate the following credentials:
+  * Distribution signing certificate: Required to sign development and release builds that are installed on an iOS device.
+  * Ad hoc provisioning profile: Required to sign builds that are installed on a device outside of the Apple App Store.
+  * Distribution provisioning profile: Required to sign the build that is submitted to the Apple App Store.
+  * Push key: Required when using a push notification service.
+
+
+For details on Distribution certificate, Provision profiles, and Push keys, see [required iOS app credentials](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/app-credentials#ios>).
+With EAS CLI, all of the above credentials can be created and synced automatically with the Apple Developer account. Once the authorized user logs in to their [Expo account](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</accounts/account-types>), they can create or update the provisioning profile by running `eas credentials` using the EAS CLI.
+Terminal
+`- ``eas login`
+`- ``eas credentials`
+The CLI will prompt for selecting a [build profile](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</build/eas-json#build-profiles>) to use for the EAS Build. If the Apple Developer account's authorized user is creating a production build, follow these steps to [create a distribution provisioning profile](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</tutorial/eas/ios-production-build#create-a-distribution-provisioning-profile>). To create a developer build, follow these steps to [create an ad hoc provisioning profile](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</tutorial/eas/ios-development-build-for-devices#provisioning-profile>).
+This ensures that the provisioning profile associated with the Expo account has necessary permissions.
+> For projects with existing credentials, see [Using existing credentials](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/existing-credentials>) for details on how to sync these to EAS or manage them manually.
+## Steps for the team developer[](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<#steps-for-the-team-developer>)
+As a developer on the team, when running `eas build -p ios` in the terminal window, the EAS CLI asks you to login to an Apple Developer account.
+Terminal
+`? Do you want to log in to your Apple account? > (Y/n)``No problem! 👌 If any of the next steps will require Apple account access we will ask you again about it.`
+Press `n` to skip logging into Apple Developer account if you don't have access (and avoid logging into your personal Apple Developer account, if any). The CLI displays message about skipping provisioning profile validation and other app signing credential validation and will continue creating the EAS Build with existing credentials
+The EAS CLI needs to use the provisioning profile associated with the Expo account to create a build for iOS. When you skip login, the EAS Build will use the last provisioning profile and other credentials that were updated by the Apple Developer account's authorized user in your organization's Expo account.
+## Additional information[](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<#additional-information>)
+### Uploading pre-generated Apple credentials[](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<#uploading-pre-generated-apple-credentials>)
+Some development teams may choose to generate distribution certificates and provisioning profiles outside of EAS. These credentials can be added by any EAS user with Developer or higher permissions using `eas credentials` or under Project > Configuration > Credentials using the Expo dashboard.
+When uploading the credentials, you will need the .p12 and .mobileprovision files, and any passwords set when generating the distribution certificate.
+### Provisioning profile expiry and updates[](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<#provisioning-profile-expiry-and-updates>)
+The associated provisioning profile needs to be updated if certain [iOS capabilities](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</build-reference/ios-capabilities>) (such as, entitlements) are added or removed, or at the annual expiry of the profile. This step is handled by the Apple Developer account's authorized user.
+### Federated Apple Developer accounts[](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<#federated-apple-developer-accounts>)
+#### EAS Build[](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<#eas-build>)
+EAS CLI can only accept an Apple account's email and password to login into your Apple Developer account. You cannot login into [Federated Apple Developer account](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/support.apple.com/en-in/guide/apple-business-manager/axmb19317543/web>) and make updates to the distribution certificate or provisioning profile. If your build credentials do not require any changes, you can skip logging in. Then, you can proceed with the build and EAS CLI will continue using your current uploaded credentials.
+However, you can provide an Apple Store Connect (ASC) API token with Admin access to check and update Apple credentials when running `eas build` command. Follow the steps in [Provide an ASC API Token for your Apple Team](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</build/building-on-ci#optional-provide-an-asc-api-token-for-your-apple-team>) to create a build by passing the required token value to the `eas build` command.
+#### EAS Submit[](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<#eas-submit>)
+EAS Submit uses the ASC API token for submitting to TestFlight. If you have a Federated Apple Developer account, you can follow the standard EAS Submit setup. It lets you automatically submit your builds using `eas build --auto-submit`.
+[Previous (EAS Build - App Signing)Security](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/security>)[Next (EAS Build - Custom builds)Get started](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</custom-builds/get-started>)
+Was this doc helpful?
+  * Share your feedback
+  * [Ask a question on the forums](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/chat.expo.dev/>)
+  * [Edit this page](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/github.com/expo/expo/edit/main/docs/pages/app-signing/apple-developer-program-roles-and-permissions.mdx>)
+  * Last updated on November 26, 2024
+
+
+Sign up for the Expo Newsletter
+Sign Up
+Unsubscribe at any time. Read our [privacy policy](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/<https:/expo.dev/privacy>).
+On this page
+[Steps for Apple Developer account's authorized user](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/apple-developer-program-roles-and-permissions/#steps-for-apple-developer-accounts-authorized-user>)[Steps for the team developer](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/apple-developer-program-roles-and-permissions/#steps-for-the-team-developer>)[Additional information](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/apple-developer-program-roles-and-permissions/#additional-information>)[Uploading pre-generated Apple credentials](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/apple-developer-program-roles-and-permissions/#uploading-pre-generated-apple-credentials>)[Provisioning profile expiry and updates](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/apple-developer-program-roles-and-permissions/#provisioning-profile-expiry-and-updates>)[Federated Apple Developer accounts](https://docs.expo.dev/app-signing/apple-developer-program-roles-and-permissions/</app-signing/apple-developer-program-roles-and-permissions/#federated-apple-developer-accounts>)

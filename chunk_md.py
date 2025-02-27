@@ -1,27 +1,14 @@
-from dataclasses import dataclass
 from datetime import datetime, timezone
-import json
-import os
-from typing import Any, Dict, List
+from typing import List
 from markdown_it import MarkdownIt
 from urllib.parse import urlparse
 from langchain.text_splitter import MarkdownTextSplitter
 
 from LLM_analysis import get_embedding, get_keywords, get_title_and_summary
 from mdTocsv import get_md_tables
-from supabase import create_client, Client
 
-@dataclass
-class ProcessedChunk:
-    path: str
-    chunk_number: int
-    title: str
-    summary: str
-    keywords: List[str]
-    content: str
-    metadata: Dict[str, Any]
-    embedding: List[float]
-    tables: List[Dict[str, Any]]
+from models import ProcessedChunk
+from supabase_database import create_document_record, finalize_document, store_chunk
 
 def parse_markdown_hierarchy(md_content: str) -> List[str]:
     """Improved parsing with hierarchy awareness"""
@@ -146,7 +133,7 @@ def chunk_markdownv1(text: str, chunk_size: int) -> List[str]:
 
     return chunks
 
-def process_chunk(chunk: str, chunk_number: int, path: str, source_type: str) -> ProcessedChunk:
+def process_chunk(chunk: str, chunk_number: int, doc_id: int) -> ProcessedChunk:
     """Process a single chunk of text."""
     # Get title and summary
     content = get_title_and_summary(chunk)
@@ -170,30 +157,30 @@ def process_chunk(chunk: str, chunk_number: int, path: str, source_type: str) ->
         for table in tables
     ]
     
-    if source_type == "webpage":
-        parsed_url = urlparse(path)
+    # if source_type == "webpage":
+    #     parsed_url = urlparse(path)
 
-        source = parsed_url.netloc
-        complete_path = parsed_url.path
+    #     source = parsed_url.netloc
+    #     complete_path = parsed_url.path
 
-    elif source_type == "pdf":
-        source = os.path.basename(path)  # PDF filename without directory
-        complete_path = path  # Full file path for PDFs
-    else:
-        raise ValueError(f"Unknown source type: {source_type}")
+    # elif source_type == "pdf":
+    #     source = os.path.basename(path)  # PDF filename without directory
+    #     complete_path = path  # Full file path for PDFs
+    # else:
+    #     raise ValueError(f"Unknown source type: {source_type}")
 
     # Create metadata
     metadata = {
-        "source": source, 
-        "path": complete_path,
-        "source_type": source_type, 
+        # "source": source, 
+        # "path": complete_path,
+        # "source_type": source_type, 
         "chunk_size": len(chunk),
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "table_references": table_references
     }
     
     return ProcessedChunk(
-        path= path,
+        document_id= doc_id,
         chunk_number= chunk_number,
         title= content['title'],
         summary= content['summary'],
@@ -204,110 +191,39 @@ def process_chunk(chunk: str, chunk_number: int, path: str, source_type: str) ->
         tables= tables
     )
 
-# Read from .env
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Initialize Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-def store_chunk(chunk: ProcessedChunk):
-    text_data = {
-        "path": chunk.path,
-        "chunk_number": chunk.chunk_number,
-        "title": chunk.title,
-        "summary": chunk.summary,
-        "keywords": chunk.keywords,
-        "content": chunk.content,
-        "metadata": chunk.metadata,
-        "embedding": chunk.embedding
-    }
-
-    supabase.table("md_chunks").insert(text_data).execute()
-
-    if chunk.tables:
-        for table in chunk.tables:
-            table_data = {
-                "table_hash": table["table_hash"],
-                "chunk_number": chunk.chunk_number,
-                "column_names": table["column_names"],
-                "csv_data": table["csv_string"],
-                "num_rows": table["num_rows"]
-            }
-            supabase.table("chunk_tables").insert(table_data).execute()
-
-
-def get_database_schema():
-    # Query to fetch schema details
-    query = """
-        SELECT 
-            table_name, 
-            column_name, 
-            CASE 
-                WHEN data_type = 'USER-DEFINED' THEN 
-                    (SELECT format_type(atttypid, atttypmod)
-                     FROM pg_attribute
-                     WHERE attname = column_name
-                     AND attrelid = (SELECT oid FROM pg_class WHERE relname = table_name LIMIT 1))
-                ELSE data_type
-            END AS data_type,
-            is_nullable
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-        ORDER BY table_schema, table_name, ordinal_position
-    """
+async def process_document(content: str, path: str, source_type: str):
+    """Process a single document end-to-end"""
+    # Create initial document record
+    document_id = await create_document_record(path, source_type)
     
-    # Execute the query using Supabase
-    response = supabase.rpc("execute_sql", {"query": query}).execute()
+    # Process chunks
+    chunks = chunk_markdownv2(content, chunk_size=2000)
+    chunk_summaries = []
     
-    # Parse the raw response as a JSON object
-    response_data = json.loads(response.model_dump_json())
-
-    # Prepare the schema in a compact structure
-    schema = {}
-
-    # Iterate over the data and handle missing or unexpected fields
-    for item in response_data['data']:
-        # Access the 'result' key inside each item
-        result = item.get('result', {})
+    for i, chunk in enumerate(chunks):
+        # Process individual chunk
+        chunk_object = process_chunk(chunk, i+1, document_id)
         
-        table_name = result['table_name']
-        column_name = result['column_name']
-        data_type = result['data_type']
-        is_nullable = "NULL" if result.get('is_nullable') == "YES" else "NOT NULL"
-
-        # Adding the column with its type and nullability
-        if table_name not in schema:
-            schema[table_name] = {}
+        # Store with document relationship
+        store_chunk(chunk_object)
         
-        if data_type == "jsonb":
-            # Query to fetch keys and their types from jsonb columns
-            jsonb_query = f"""
-                SELECT DISTINCT
-                    jsonb_object_keys(metadata) AS key,
-                    jsonb_typeof(metadata -> jsonb_object_keys(metadata)) AS key_type
-                FROM {table_name}
-                WHERE {column_name} IS NOT NULL
-            """
-            
-            # Execute the query to introspect jsonb keys
-            jsonb_response = supabase.rpc("execute_sql", {"query": jsonb_query}).execute()
-            jsonb_data = json.loads(jsonb_response.model_dump_json())
+        # Collect data for document summary
+        chunk_summaries.append(chunk_object.summary)
+    
+    # Generate document-level summary
+    combined_chunk_summaries = "\n\n".join(chunk_summaries)
 
-            # Collect key-type pairs
-            keys_details = {}
-            for jsonb_item in jsonb_data['data']:
-                jsonb_result = jsonb_item.get('result', {})
-                key = jsonb_result['key']
-                key_type = jsonb_result['key_type']
-                keys_details[key] = key_type
+    doc_content = get_title_and_summary(chunks[0] + combined_chunk_summaries, "8-10")
+    doc_keywords = get_keywords(content, 15)
+    doc_embedding = get_embedding(doc_content['summary'])
+    
+    # Finalize document record
+    await finalize_document(
+        document_id=document_id,
+        title=doc_content['title'],
+        summary=doc_content['summary'],
+        keywords=doc_keywords,
+        embedding=doc_embedding
+    )
 
-            # Add the jsonb details to the schema
-            schema[table_name][column_name] = {
-                "type": f"{data_type} ({is_nullable})",
-                "keys": keys_details
-            }
-        else:
-            schema[table_name][column_name] = f"{data_type} ({is_nullable})"
-
-    return schema

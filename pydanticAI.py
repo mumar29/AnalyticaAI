@@ -1,14 +1,19 @@
+from dataclasses import dataclass
 import os
 import re
+import sys
 from groq import RateLimitError
 import nest_asyncio
-import streamlit as st
 from supabase import create_client, Client
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.groq import ModelRequest, ModelResponse, UserPromptPart, SystemPromptPart, TextPart
 import tiktoken
 from datetime import datetime
 from dotenv import load_dotenv
+from LLM_analysis import get_embedding
+import streamlit as st
+
+from visualization import generate_lida_visualization
 
 # Load environment variables from .env file
 load_dotenv()
@@ -25,11 +30,111 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # Use a valid encoding name
 encoding = tiktoken.get_encoding("cl100k_base")
 
-# Create an agent using Groq
-agent = Agent(
-    'groq:llama-3.3-70b-versatile',
-    system_prompt='You are a helpful assistant',
+@dataclass
+class AgenticRAGDeps:
+    supabase_client: Client
+
+deps = AgenticRAGDeps(
+    supabase_client=supabase,
 )
+
+# Create an agent using Groq
+rag_agent = Agent(
+    model = 'groq:llama-3.3-70b-versatile',
+    deps_type = AgenticRAGDeps,
+    system_prompt=
+"""
+    You are an advanced research assistant specializing in Retrieval-Augmented Generation (RAG). Your role is to automatically retrieve and analyze relevant documentation from a comprehensive database in response to user queries. Follow these guidelines:
+
+        1. **Automatic Retrieval:**  
+        - Immediately search for and retrieve documentation pages relevant to the query.
+
+        2. **Documentation-Driven Answers:**  
+        - Base your responses solely on the content of the retrieved documentation.
+        - If the query falls outside the documented scope or if no relevant documents are found, inform the user honestly.
+
+        3. **Proactive Operation:**  
+        - Do not ask for user confirmation before initiating the retrieval and analysis process.
+        - Ensure your final response is comprehensive, accurate, and directly tied to the retrieved documentation.
+
+        Stay focused on leveraging the documentation to provide clear, evidence-based answers.
+"""
+)
+
+@rag_agent.tool
+async def retrieve_relevant_documentation(ctx: RunContext[AgenticRAGDeps], user_query: str) -> str:
+    """
+    Retrieve relevant documentation chunks based on the query with RAG.
+    
+    Args:
+        ctx: The context including the Supabase client
+        user_query: The user's question or query
+        
+    Returns:
+        A formatted string containing the top 3 most relevant documentation chunks
+    """
+
+    try:
+        # Get the embedding for the query
+        query_embedding = get_embedding(user_query)
+
+        # Query Supabase for relevant documents
+        result = ctx.deps.supabase_client.rpc(
+            'match_md_chunks',
+            {
+                'query_embedding': query_embedding,
+                'match_count': 3,
+            }
+        ).execute()
+        
+        if not result.data:
+            return "No relevant documentation found."
+            
+        # Format the results
+        formatted_chunks = []
+        csv_data_most_relevant = None
+
+        most_relevant_chunk = max(result.data, key=lambda chunk: chunk['similarity'])
+        print("most_relevant_chunk", most_relevant_chunk)
+
+        # Check for table references in metadata
+        metadata = most_relevant_chunk.get('metadata', {})
+        table_refs = metadata.get('table_references', [])
+        for table_ref in table_refs:
+            table_hash = table_ref.get('table_hash')
+            if table_hash:
+                # Query chunk_tables for the table_hash
+                table_result = ctx.deps.supabase_client.from_('chunk_tables') \
+                    .select('*') \
+                    .eq('table_hash', table_hash) \
+                    .execute()
+
+                if table_result.data:
+                    # Update the most relevant CSV data
+                    csv_data_most_relevant = table_result.data[0].get('csv_data')
+
+        # Process all chunks to build formatted output and find the most relevant CSV data
+        for doc in result.data:
+            # Format the chunk for output
+            chunk_text = f"""
+# {doc['title']}
+
+{doc['content']}
+"""
+            formatted_chunks.append(chunk_text)
+
+        # If we found CSV data, generate a visualization
+        if csv_data_most_relevant:
+            print("Found CSV", csv_data_most_relevant)
+            image = generate_lida_visualization(csv_data_most_relevant)
+            st.session_state.latest_image = image
+
+        # Join all chunks with a separator
+        return "\n\n---\n\n".join(formatted_chunks)
+        
+    except Exception as e:
+        print(f"Error retrieving documentation: {e}")
+        return f"Error retrieving documentation: {str(e)}"
 
 st.set_page_config(page_title="Analytica AI", page_icon="🤖")
 st.title("Chat with Analytica AI")
@@ -113,9 +218,9 @@ if 'agent_messages' not in st.session_state:
     st.session_state.agent_messages = get_summary_model(summary) if summary else list(st.session_state.message_history)
 
 
-def run_agent(prompt, message_history=None):
+def run_agent(prompt, deps = None, message_history = None):
     try:
-        result = agent.run_sync(prompt, message_history=message_history)
+        result = rag_agent.run_sync(prompt, deps= deps, message_history=message_history)
         return result
     except RateLimitError as e:
         # Try to extract the retry wait time from the error message using a regex
@@ -167,7 +272,7 @@ if user_input:
             st.write(user_input)
 
         # Run the agent with the user input and message history    
-        result = run_agent(user_input, st.session_state.agent_messages)
+        result = run_agent(user_input, deps, st.session_state.agent_messages)
         if result is None:
             st.stop()
         
@@ -187,6 +292,11 @@ if user_input:
 
         with st.chat_message("assistant"):
             st.write(ai_response)
+            # Check if there's an image to display
+            if 'latest_image' in st.session_state:
+                st.image(st.session_state.latest_image)
+                # Remove the image from session state to avoid reuse
+                del st.session_state.latest_image
 
         # Save messages to the database
         for msg in new_messages:

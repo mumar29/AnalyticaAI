@@ -4,46 +4,42 @@ from groq import Groq
 from keybert import KeyBERT
 import numpy as np
 from sentence_transformers import SentenceTransformer
+from pydantic import BaseModel
 import torch
+torch.classes.__path__ = []
 
 embeding_model = SentenceTransformer("Snowflake/snowflake-arctic-embed-l-v2.0")
 
 groq_client = Groq(
-    api_key="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"
+    # api_key="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"
+    api_key="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"
 )
 
 kw_model = KeyBERT()
 
-def get_title_and_summary(chunk: str) -> Dict[str, str]:
-    system_prompt = """You are an expert technical documentation analyst. Extract titles and summaries from documentation chunks following these rules:
+class Document(BaseModel):
+    title: str
+    summary: str
 
-        1. Title Rules:
-        - If the chunk starts with a main heading (e.g., "# Getting Started"), use that exact heading
-        - For middle chunks without headings, create a 3-5 word title like "Configuring Expo Router" or "Debugging Tips"
-        - Never use markdown formatting in titles
-        - Prioritize technical terms (e.g., "EAS Builds" over "Building Apps")
+def get_title_and_summary(chunk: str, summary_range: str = "1-2") -> Dict[str, str]:
+    system_prompt = f"""You are an expert documentation analyst capable of handling diverse inputs—plain text or markdown, full documents or chunks, technical or business content. Extract a concise title and a brief summary using these rules:
+        Title:
+        - If a main heading is present (e.g., "# Getting Started"), use it exactly.
+        - Otherwise, generate a 3-5 word title without markdown formatting.
+        - Prioritize technical terms when relevant.
 
-        2. Summary Rules:
-        - 1-2 sentences maximum
-        - Include key technical terms and concepts
-        - Mention specific tools/commands (e.g., `npx create-expo-app`)
-        - Preserve important numbers/version info
-        - Never include markdown
+        Summary:
+        - Provide {summary_range} clear sentences capturing key points, technical terms, and important details.
+        - Avoid markdown formatting.
 
-        Return JSON format: {"title": "...", "summary": "..."}
-
-        Example input:
-        ## Development Builds
-        Create native binaries using `eas build`. Configure with eas.json.
-
-        Example output:
-        {"title": "Development Builds", "summary": "Create native binaries using eas build command and configure builds through eas.json configuration file."}"""
-    
+        The JSON object must use the following schema:
+        {json.dumps(Document.model_json_schema(), indent=2)}"""
+ 
     try:
         response = groq_client.chat.completions.create(
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Content:\n{chunk}"}
+                {"role": "user", "content": chunk}
             ],
             response_format={ "type": "json_object" },
             model="llama-3.3-70b-versatile"

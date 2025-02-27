@@ -1,0 +1,14 @@
+groq
+crawl4ai
+lida
+llmx
+llama-index
+llama-parse
+supabase
+streamlit
+pydantic_ai
+langchain
+keybert
+tiktoken
+torch
+sentence_transformers

@@ -7,7 +7,8 @@ from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 from xml.etree import ElementTree
 from llama_parse import LlamaParse
 from llama_index.core import SimpleDirectoryReader
-from chunk_md import chunk_markdownv2, get_database_schema, process_chunk, store_chunk
+from chunk_md import chunk_markdownv2, process_chunk, process_document, store_chunk
+from supabase_database import get_database_schema
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -91,41 +92,40 @@ async def main():
                     print(f"Failed to crawl {result.url}: {result.error_message}")
     
     elif source_type == "pdf":
-        pdf_folder = "pdfs"
-        pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.endswith(".pdf")]
+        md_folder = "markdown"  # Folder where your extracted Markdown files are stored
+        md_files = [os.path.join(md_folder, f) for f in os.listdir(md_folder) if f.endswith(".md")]
 
-        parser = LlamaParse(result_type="markdown")
-        file_extractor = {".pdf": parser}
+        for md_path in md_files:
+            print(f"Processing Markdown File: {md_path}")
 
-        for pdf_path in pdf_files:
-            print(f"Processing PDF: {pdf_path}")
-
-            # Convert PDF to Markdown
-            documents = SimpleDirectoryReader(input_files=[pdf_path], file_extractor=file_extractor).load_data()
-            markdown_content = "\n".join([doc.text for doc in documents])
+            # Read the markdown file
+            with open(md_path, "r", encoding="utf-8") as f:
+                markdown_content = f.read()
 
             # Chunk and store the extracted markdown
-            chunks = chunk_markdownv2(markdown_content, chunk_size=2000)
-            for i, chunk in enumerate(chunks):
-                print(f"Chunk {i + 1}: {chunk}\n")
-                chunk_object = process_chunk(chunk, i + 1, pdf_path, source_type="pdf")
-                store_chunk(chunk_object)
-        # md_folder = "markdown"  # Folder where your extracted Markdown files are stored
-        # md_files = [os.path.join(md_folder, f) for f in os.listdir(md_folder) if f.endswith(".md")]
+            await process_document(markdown_content, md_path, "pdf")
 
-        # for md_path in md_files:
-        #     print(f"Processing Markdown File: {md_path}")
+        # pdf_folder = "pdfs"
+        # pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.endswith(".pdf")]
 
-        #     # Read the markdown file
-        #     with open(md_path, "r", encoding="utf-8") as f:
-        #         markdown_content = f.read()
+        # parser = LlamaParse(result_type="markdown")
+        # file_extractor = {".pdf": parser}
 
-        #     # Chunk and store the extracted markdown
-        #     chunks = chunk_markdownv2(markdown_content, chunk_size=2000)
-        #     for i, chunk in enumerate(chunks):
-        #         print(f"Chunk {i + 1}: {chunk}\n")
-        #         chunk_object = process_chunk(chunk, i + 1, md_path, source_type="pdf")
-        #         store_chunk(chunk_object)
+        # for pdf_path in pdf_files:
+        #     print(f"Processing PDF: {pdf_path}")
+
+        #     # Convert PDF to Markdown
+        #     documents = SimpleDirectoryReader(input_files=[pdf_path], file_extractor=file_extractor).load_data()
+        #     markdown_content = "\n".join([doc.text for doc in documents])
+
+        #     await process_document(markdown_content, pdf_path, "pdf")
+
+            # # Chunk and store the extracted markdown
+            # chunks = chunk_markdownv2(markdown_content, chunk_size=2000)
+            # for i, chunk in enumerate(chunks):
+            #     print(f"Chunk {i + 1}: {chunk}\n")
+            #     chunk_object = process_chunk(chunk, i + 1, pdf_path, source_type="pdf")
+            #     store_chunk(chunk_object)
 
     else:
         print("Invalid source type. Please enter 'webpage' or 'pdf'.")

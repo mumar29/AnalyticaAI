@@ -82,7 +82,7 @@ CREATE OR REPLACE FUNCTION match_md_chunks (
   query_embedding vector(1024),
   match_count int DEFAULT 10,
   filter jsonb DEFAULT '{}',
-  p_document_id bigint DEFAULT NULL
+  p_document_ids bigint[] DEFAULT NULL  -- Change to an array of document IDs
 ) RETURNS TABLE (
   chunk_id bigint,
   document_id bigint,
@@ -106,11 +106,12 @@ BEGIN
     1 - (c.embedding <=> query_embedding) AS similarity
   FROM md_chunks c
   WHERE c.metadata @> filter
-    AND (p_document_id IS NULL OR c.document_id = p_document_id)
+    AND (p_document_ids IS NULL OR c.document_id = ANY(p_document_ids))  -- Updated filter for multiple IDs
   ORDER BY c.embedding <=> query_embedding
   LIMIT match_count;
 END;
 $$;
+
 
 -- Everything above will work for any PostgreSQL database. The below commands are for Supabase security
 

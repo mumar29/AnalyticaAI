@@ -42,6 +42,11 @@ async def save_markdown_file(result):
 
 async def main():
 
+    
+    schema = get_database_schema()
+    schema_json = json.dumps(schema, indent=4)
+    print(schema_json)
+
     source_type = input("Enter source type (webpage/pdf): ").strip().lower()
 
     # Process Webpages

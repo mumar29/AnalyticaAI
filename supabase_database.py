@@ -1,20 +1,26 @@
+#supabase_database.py
 import os
 import json
-import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 from supabase import create_client, Client
 
-from chunk_md import ProcessedChunk
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from LLM_analysis import get_embedding
+from agent_functions import Document
+from models import ProcessedChunk
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def execute_sql_query(query: str) -> Optional[List[dict]]:
+    try:
+        response = supabase.rpc("execute_sql", {"query": query}).execute()
+        return response.data
+    
+    except Exception as e:
+        raise
 
 def get_database_schema():
     # Unified SQL query to fetch both schema details and table-level view access.
@@ -25,9 +31,9 @@ def get_database_schema():
             CASE 
                 WHEN c.data_type = 'USER-DEFINED' THEN 
                     (SELECT format_type(atttypid, atttypmod)
-                     FROM pg_attribute
-                     WHERE attname = c.column_name
-                       AND attrelid = (SELECT oid FROM pg_class WHERE relname = c.table_name LIMIT 1))
+                    FROM pg_attribute
+                    WHERE attname = c.column_name
+                    AND attrelid = (SELECT oid FROM pg_class WHERE relname = c.table_name LIMIT 1))
                 ELSE c.data_type
             END AS data_type,
             c.is_nullable,
@@ -36,13 +42,15 @@ def get_database_schema():
                     SELECT json_agg(grantee) 
                     FROM information_schema.role_table_grants
                     WHERE table_schema = 'public'
-                      AND table_name = c.table_name
-                      AND grantee IN ('manager', 'customer')
+                    AND table_name = c.table_name
+                    AND grantee IN ('manager', 'customer', 'admin')
                 ),
                 '[]'::json
             ) AS view_access
         FROM information_schema.columns c
+        JOIN table_categories tc ON LOWER(c.table_name) = LOWER(tc.table_name)
         WHERE c.table_schema = 'public'
+        AND tc.category = 'store'
         ORDER BY c.table_name, c.ordinal_position
     """
     
@@ -89,13 +97,10 @@ async def create_document_record(path: str, source_type: str) -> str:
     }
 
     try:
-        logger.info(f"Creating document record for path: {path}, source_type: {source_type}")
         result = supabase.table("md_documents").insert(doc_data).execute()
         document_id = result.data[0]['document_id']
-        logger.info(f"Document created successfully with ID: {document_id}")
         return document_id
     except Exception as e:
-        logger.error(f"Error creating document record: {e}")
         raise
 
 async def finalize_document(document_id: str, title: str, summary: str, 
@@ -109,11 +114,8 @@ async def finalize_document(document_id: str, title: str, summary: str,
     }
 
     try:
-        logger.info(f"Finalizing document ID: {document_id} with title: {title}")
         supabase.table("md_documents").update(update_data).eq("document_id", document_id).execute()
-        logger.info(f"Document ID: {document_id} updated successfully")
     except Exception as e:
-        logger.error(f"Error finalizing document ID {document_id}: {e}")
         raise
 
 def store_chunk(chunk: ProcessedChunk):
@@ -142,3 +144,81 @@ def store_chunk(chunk: ProcessedChunk):
                 "num_rows": table["num_rows"]
             }
             supabase.table("md_tables").insert(table_data).execute()
+
+async def retrieve_all_documents() -> List[Document]:
+    try:
+        documents_result = supabase.from_('md_documents').select('document_id, title, summary').execute()
+
+        if not documents_result.data:
+            return []  # No documents found
+
+        documents = [
+            Document(id=doc["document_id"], title=doc["title"], summary=doc["summary"])
+            for doc in documents_result.data
+        ]
+
+        return documents
+        
+    except Exception as e:
+        print(f"Error retrieving documentation: {e}")
+        return []
+
+async def retrieve_relevant_chunks(document_ids: List[int], user_query: str) -> Tuple[List[int], str]:
+    try:
+        # Get the embedding for the query
+        query_embedding = get_embedding(user_query)
+
+        # Query Supabase for relevant documents
+        result = supabase.rpc(
+            'match_md_chunks',
+            {
+                'query_embedding': query_embedding,
+                'match_count': 3,
+                'p_document_ids': document_ids
+            }
+        ).execute()
+        
+        if not result.data:
+            return [], "No relevant documentation found."
+            
+        chunk_ids = [doc['chunk_id'] for doc in result.data]
+
+        # Format the results
+        formatted_chunks = []
+
+        # Process all chunks to build formatted output and find the most relevant CSV data
+        for doc in result.data:
+            # Format the chunk for output
+            chunk_text = f"""
+                # {doc['title']}
+
+                {doc['content']}
+                """
+            formatted_chunks.append(chunk_text)
+
+        # Join all chunks with a separator
+        return chunk_ids, "\n\n---\n\n".join(formatted_chunks)
+        
+    except Exception as e:
+        print(f"Error retrieving documentation: {e}")
+        return [], f"Error retrieving documentation: {str(e)}"
+
+async def retrieve_chunks_tables(chunk_ids: List[int]) -> List[str]:
+    try:
+
+        # Query Supabase for chunk tables
+        result = supabase.from_('md_tables') \
+                    .select('csv_data') \
+                    .in_("chunk_id", chunk_ids) \
+                    .execute()
+        
+        if not result.data:
+            return []
+        
+        csv_data_list = [item['csv_data'] for item in result.data]
+   
+        return csv_data_list  # Return list of csv_data values
+        
+    except Exception as e:
+        print(f"Error retrieving documentation: {e}")
+        return []

@@ -5,8 +5,6 @@ create table conversations (
     created_at timestamp default now()
 );
 
-and
-
 create table messages (
     id bigserial primary key,
     conversation_id bigint references conversations(id),

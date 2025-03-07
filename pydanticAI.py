@@ -1,7 +1,9 @@
 from dataclasses import dataclass
+import json
 import os
 import re
 import sys
+from typing import List
 from groq import RateLimitError
 import nest_asyncio
 from supabase import create_client, Client
@@ -14,6 +16,7 @@ from LLM_analysis import get_embedding
 import streamlit as st
 
 from visualization import generate_lida_visualization
+from pydantic import BaseModel
 
 # Load environment variables from .env file
 load_dotenv()
@@ -61,8 +64,98 @@ rag_agent = Agent(
 """
 )
 
+class Document(BaseModel):
+    id: int
+    title: str
+    summary: str
+
+class Select_Docs(BaseModel):
+    user_query: str
+    docs: List[Document]
+
+class Doc_Ids(BaseModel):
+    ids: List[int]
+
+document_selector_agent = Agent(
+    model = 'groq:llama-3.3-70b-versatile',
+    deps_type = AgenticRAGDeps,
+    result_type = Doc_Ids,
+    system_prompt = f"""
+        You are an expert document selector. Given a user query, you will select relevant documents from a list of available documents.
+
+        **Task Breakdown:**
+
+        1. **Retrieve Document List:** Use the `retrieve_all_documents` tool to fetch a list of all available documents. Each document will have an ID, title, and summary.
+        2. **Analyze Documents and User Query:**  Examine the titles and summaries of the retrieved documents in relation to the user query.
+        3. **Select Relevant Documents:** Determine which documents' *full content* is most likely to contain information relevant to the query.  Focus on whether the document's *full content* (not just summary) could answer the query. You may select zero, one, or multiple documents.
+        4. **Return Document IDs:** Return a JSON object containing a list of just the *ids* of the documents you select. If no documents are relevant, return an empty list in the "document_ids" field.
+
+        **Output Format:**
+
+        Return your response as a JSON object conforming to the following schema:
+        {json.dumps(Doc_Ids.model_json_schema(), indent=2)}
+        """
+)
+
+
 @rag_agent.tool
-async def retrieve_relevant_documentation(ctx: RunContext[AgenticRAGDeps], user_query: str) -> str:
+async def select_relevant_documents(ctx: RunContext[AgenticRAGDeps], user_query: str) -> list[int]:
+    print("select_relevant_documents called")
+
+    """
+    Select all documents from the Supabase database relevant to the user's query.
+    
+    Args:
+        ctx: The context including the Supabase client
+        user_query: The user's question or query
+        
+    Returns:
+        A list of Document IDs
+    """
+    r = document_selector_agent.run_sync(
+        user_query,
+        deps=ctx.deps,
+    )
+    return r.data.ids
+
+@document_selector_agent.tool
+async def retrieve_all_documents(ctx: RunContext[AgenticRAGDeps]) -> List[Document]:
+    print("retrieve_all_documents called")
+    """
+    Retrieve all documents from the Supabase database.
+    
+    Args:
+        ctx: The context including the Supabase client
+        
+    Returns:
+        A list of Document objects containing document_id, title, and summary for all documents
+        
+    Raises:
+        Exception: Logs error if database query fails and return an empty list
+    """
+
+    try:
+        documents_result = ctx.deps.supabase_client.from_('md_documents').select('document_id, title, summary').execute()
+        print("documents_result doc_ids: ", documents_result.data)
+
+        if not documents_result.data:
+            return []  # No documents found
+
+        documents = [
+            Document(id=doc["document_id"], title=doc["title"], summary=doc["summary"])
+            for doc in documents_result.data
+        ]
+
+        return documents
+        
+    except Exception as e:
+        print(f"Error retrieving documentation: {e}")
+        return []
+
+@rag_agent.tool
+async def retrieve_relevant_chunks(ctx: RunContext[AgenticRAGDeps], document_ids: List[int], user_query: str) -> str:
+    print("retrieve_relevant_chunks called")
+
     """
     Retrieve relevant documentation chunks based on the query with RAG.
     
@@ -78,12 +171,15 @@ async def retrieve_relevant_documentation(ctx: RunContext[AgenticRAGDeps], user_
         # Get the embedding for the query
         query_embedding = get_embedding(user_query)
 
+        print("document_ids: ", document_ids)
+
         # Query Supabase for relevant documents
         result = ctx.deps.supabase_client.rpc(
             'match_md_chunks',
             {
                 'query_embedding': query_embedding,
                 'match_count': 3,
+                'p_document_ids': document_ids
             }
         ).execute()
         

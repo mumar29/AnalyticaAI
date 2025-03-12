@@ -276,6 +276,24 @@ async def update_conversation_summary(user_id, conversation_id, summary):
         print(f"Error updating conversation summary: {e}")
         return None 
 
+async def get_user_conversations(user_id: str) -> List[dict] | None:
+    try:
+        response = supabase.table("conversations") \
+            .select("*") \
+            .eq("user_id", user_id) \
+            .order("created_at", desc=True) \
+            .execute()
+
+
+        if not response.data:
+            return None
+
+        return response.data
+
+    except Exception as e:
+        print(f"Error retrieving conversations: {e}")
+        return None
+
 async def get_conversation_messages(conversation_id, limit: Optional[int] = None)-> List[ConversationMessage] | None:
     try: 
 

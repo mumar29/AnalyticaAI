@@ -259,6 +259,12 @@ app = workflow.compile()
 async def handle_query(user_input: str, user_id: str, session_id: str):
     request_id = str(uuid.uuid4())
 
+    session = await get_conversation_session(user_id, session_id)
+    if isinstance(session, dict):
+        session_id = session.get("id")
+    else:
+        session_id = session
+        
     conversation_history = await get_conversation_messages(session_id, 4)
 
     initial_state = {

@@ -17,7 +17,7 @@ from chunk_md import process_document
 from crawler import crawl_website
 from lang_graph import handle_query
 from logging_config import logger
-from supabase_database import execute_sql_query, get_conversation_messages, get_database_schema
+from supabase_database import execute_sql_query, get_conversation_messages, get_database_schema, get_user_conversations
 from websocket_manager import manager
 from redis_config import get_redis_client
 from dotenv import load_dotenv
@@ -96,7 +96,7 @@ async def websocket_endpoint(websocket: WebSocket):
 router = APIRouter(dependencies=[Depends(validate_api_key)])
 
 @router.post("/query/{session_id}", response_model=QueryResponse)
-async def process_query(
+async def process_query_endpoint(
     session_id: str,
     request: QueryRequest, 
     auth: bool = Depends(validate_api_key)
@@ -106,7 +106,7 @@ async def process_query(
         start_time = time.time()
         
         # Execute workflow
-        result = await handle_query(request.text, "u_1",session_id)
+        result = await handle_query(request.text, "u_1", session_id)
 
         print("Got handle_query result")
         
@@ -123,8 +123,24 @@ async def process_query(
         logger.error(f"Query failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Processing error")
 
-@router.get("/conversation/{session_id}")
-async def get_conversation(
+@router.get("/get-conversations/{user_id}")
+async def get_user_conversations_endpoint(
+    user_id: str,
+    auth: bool = Depends(validate_api_key)
+):
+    """Retrieve all conversations for a user"""
+    try:
+        conversations = await get_user_conversations(user_id)
+        
+        return conversations
+
+    except Exception as e:
+        logger.error(f"Error retrieving user conversations: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error retrieving user conversations")
+
+
+@router.get("/conversation-messages/{session_id}")
+async def get_conversation_endpoint(
     session_id: str,
     auth: bool = Depends(validate_api_key)
 ):
@@ -142,7 +158,7 @@ async def get_conversation(
         raise HTTPException(status_code=500, detail="Error retrieving conversation")
 
 @router.get("/get-company-health", response_model=PerformanceReport)
-async def get_company_health(
+async def get_company_health_endpoint(
     auth: bool = Depends(validate_api_key)
 ):
     """
@@ -181,7 +197,7 @@ async def get_company_health(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/generate-report/{request_id}", response_model=Report)
-async def generate_report(
+async def generate_report_endpoint(
     request_id: str, 
     auth: bool = Depends(validate_api_key)
 ):
@@ -209,7 +225,7 @@ os.makedirs(PDF_UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(GENERATED_MARKDOWN_FOLDER, exist_ok=True)
 
 @router.post("/process-pdf")
-async def process_pdf(
+async def process_pdf_endpoint(
     pdf: UploadFile = File(...),
     premium_mode: bool = Form(False),
     auth: bool = Depends(validate_api_key)

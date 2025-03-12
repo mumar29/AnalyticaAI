@@ -5,8 +5,8 @@ from typing import TypedDict, Optional, List
 from langchain_core.messages import HumanMessage, AIMessage
 from redis_config import get_redis_client
 
-from agent_functions import ChartConfigList, call_llm, classify_user_input, get_chart_configs, select_relevant_documents, select_relevant_sql_tables
-from supabase_database import execute_sql_query, get_database_schema, retrieve_all_documents, retrieve_chunks_tables, retrieve_relevant_chunks
+from agent_functions import call_llm, classify_user_input, get_chart_configs, refine_query, select_relevant_documents, select_relevant_sql_tables
+from supabase_database import execute_sql_query, get_conversation_messages, get_conversation_session, get_database_schema, retrieve_all_documents, retrieve_chunks_tables, retrieve_relevant_chunks, save_converation_message
 from logging_config import logger
 from utils import list_dict_to_csv
 from websocket_manager import manager
@@ -15,7 +15,10 @@ redis_client = get_redis_client()
 
 # Define state schema
 class AgentState(TypedDict):
+    user_id: str
+    session_id: str
     user_input: str
+    conversation_history: Optional[List[dict]] 
     needs_rag: Optional[bool]
     data_source: Optional[str]
     sql_results: Optional[List[dict]]
@@ -30,7 +33,12 @@ async def route_query(state: AgentState):
     logger.info("Routing query: %s", state["user_input"])
     await manager.broadcast("Classifying your query") 
     
-    classification = classify_user_input(state["user_input"])
+    context = {
+        "recent_messages": state["conversation_history"],
+        "current_query": state["user_input"]
+    }
+
+    classification = classify_user_input(context)
     logger.debug("Classification result: %s", classification)
     
     if hasattr(classification, "error"):
@@ -50,11 +58,16 @@ workflow.add_node("router", route_query)
 async def process_sql(state: AgentState):
     if state["data_source"] in ["both", "sql"]:
         logger.info("Processing SQL query for: %s", state["user_input"])
-        schema = get_database_schema()
+        schema = await get_database_schema()
 
         await manager.broadcast("Identifying relevant SQL tables and generating SQL queries") 
 
-        tables = select_relevant_sql_tables(schema, state["user_input"])
+        context = {
+            "recent_messages": state["conversation_history"],
+            "current_query": state["user_input"]
+        }
+
+        tables = select_relevant_sql_tables(schema, context)
         logger.debug("SQL queries generated: %s", tables.sql_queries)
         
         results = []
@@ -82,10 +95,18 @@ async def process_docs(state: AgentState):
         logger.debug("Documents retrieved: %s", docs)
         
         await manager.broadcast("Identifying relevant PDF documents and their sections") 
-        selected = select_relevant_documents(docs, state["user_input"])
+
+        context = {
+            "recent_messages": state["conversation_history"],
+            "current_query": state["user_input"]
+        }
+
+        selected = select_relevant_documents(docs, context)
         logger.debug("Documents selected: %s", selected)
         
-        chunk_ids, chunks_text = await retrieve_relevant_chunks(selected.ids, state["user_input"])
+        new_query = refine_query(context)
+        
+        chunk_ids, chunks_text = await retrieve_relevant_chunks(selected.ids, new_query.final_query)
         chunk_tables = await retrieve_chunks_tables(chunk_ids)
 
         logger.debug("Retrieved document chunks: %s", chunks_text)
@@ -103,12 +124,41 @@ workflow.add_node("doc_processor", process_docs)
 # 4. Response Generation Node
 async def generate_response(state: AgentState):
     logger.info("Generating final response.")
-    await manager.broadcast("Generating the query response") 
+
+    # conversation_session = await get_conversation_session(state["user_id"], state["session_id"])
+    # recent_conversation = await get_conversation_messages(state["session_id"], 4)
+
+    await manager.broadcast("Generating the query response")
+
+    # conversation_history = {}
+    # summary_text = conversation_session.get("summary") if conversation_session and "summary" in conversation_session else None
+
+    # # Only include messages if they exist
+    # if recent_conversation:
+    #     conversation_history["messages"] = [
+    #         {"role": msg["role"], "content": { "text" : msg["text_content"], "metadata" : msg["json_content"]}} for msg in reversed(recent_conversation)
+    #     ]
+
+    # # Only include summary if it exists
+    # if summary_text:
+    #     conversation_history["summary"] = summary_text
+
+    # conversation_history = conversation_history if conversation_history else None
+
+    # Build Conversation context
+    context_data = {
+        "user_query": state["user_input"],
+        "context": {
+            "conversation_history": state["conversation_history"]
+        }
+    }
+
+    user_content = json.dumps(context_data, indent=2)
 
     if not state["needs_rag"]:
         result = call_llm(
-            system_prompt="You are a helpful assistant",
-            user_content=state["user_input"]
+            system_prompt = "You are a helpful assistant",
+            user_content = user_content
         )
         logger.debug("LLM result (non-RAG): %s", result.content)
         response = {
@@ -116,16 +166,13 @@ async def generate_response(state: AgentState):
             "chart_configs": None
         }
         return {"final_response": response}
-
-    # Build RAG context
-    context_data = {
-        "user_query": state["user_input"],
-        "context": {
-            "sql_results": state.get("sql_results", []),
-            "doc_results": {"chunks_text": state["doc_results"]["chunks_text"]} if state.get("doc_results") else {}
-        }
-    }
     
+    # Build RAG context
+    context_data["context"]["retrieval_results"] = {
+        "sql_results": state.get("sql_results", []),
+        "doc_results": {"chunks_text": state["doc_results"]["chunks_text"]} if state.get("doc_results") else {}
+    }
+
     user_content = json.dumps(context_data, indent=2)
     logger.debug("Context for RAG: %s", user_content)
     
@@ -147,10 +194,17 @@ async def generate_response(state: AgentState):
     if state.get("doc_results") and state["doc_results"].get("chunk_tables"):
         all_csv_list.extend(state["doc_results"]["chunk_tables"])
 
+    logger.debug("Collected CSVs: %s", all_csv_list)
+
     await manager.broadcast("Generating visualizations") 
 
+    context = {
+        "recent_messages": state["conversation_history"],
+        "current_query": state["user_input"]
+    }
+
     # Call get_chart_configs with the collected CSV list and the user query.
-    chart_configs = get_chart_configs(all_csv_list, state["user_input"]) if all_csv_list else None
+    chart_configs = get_chart_configs(all_csv_list, context) if all_csv_list else None
 
     logger.debug("Chart configurations: %s", chart_configs)
 
@@ -202,12 +256,19 @@ workflow.add_edge("response_generator", END)
 app = workflow.compile()
 
 # RAG Usage
-async def handle_query(user_input: str):
+async def handle_query(user_input: str, user_id: str, session_id: str):
     request_id = str(uuid.uuid4())
 
+    conversation_history = await get_conversation_messages(session_id, 4)
+
     initial_state = {
-        "user_input": user_input
+        "user_id": user_id,
+        "session_id": session_id,
+        "user_input": user_input,
+        "conversation_history": conversation_history
     }
+
+    await save_converation_message(session_id, "user", user_input)
 
     result = await app.ainvoke(initial_state)
 
@@ -226,6 +287,8 @@ async def handle_query(user_input: str):
     redis_client.set(request_id, json.dumps(context_data), ex=3600)
     
     final_response_data = result["final_response"]  # Extract the dictionary
+
+    await save_converation_message(session_id, "AI", final_response_data["text_response"], final_response_data["chart_configs"].model_dump() if final_response_data["chart_configs"] else None)
 
     final_response = {
         "text_response": final_response_data["text_response"],

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Union
 from markdown_it import MarkdownIt
 from urllib.parse import urlparse
 from langchain.text_splitter import MarkdownTextSplitter
@@ -191,31 +191,47 @@ def process_chunk(chunk: str, chunk_number: int, doc_id: int) -> ProcessedChunk:
         tables= tables
     )
 
-
-async def process_document(content: str, path: str, source_type: str):
-    """Process a single document end-to-end"""
+async def process_document(content: Union[str, List[str]], path: str, source_type: str):
+    """Process a single document end-to-end.
+    
+    Args:
+        content: A single markdown string or a list of markdown strings (each for a separate webpage).
+        path: The identifier for the document (could be a file path or domain).
+        source_type: The type of source (e.g., "pdf" or "webpage").
+    """
     # Create initial document record
     document_id = await create_document_record(path, source_type)
     
-    # Process chunks
-    chunks = chunk_markdownv2(content, chunk_size=2000)
     chunk_summaries = []
     
-    for i, chunk in enumerate(chunks):
-        # Process individual chunk
-        chunk_object = process_chunk(chunk, i+1, document_id)
-        
-        # Store with document relationship
-        store_chunk(chunk_object)
-        
-        # Collect data for document summary
-        chunk_summaries.append(chunk_object.summary)
+    # Decide whether we're dealing with a single markdown or multiple pages.
+    if isinstance(content, list):
+        # Process each webpage's markdown separately
+        for page_markdown in content:
+            chunks = chunk_markdownv2(page_markdown, chunk_size=2000)
+            for i, chunk in enumerate(chunks):
+                chunk_object = process_chunk(chunk, i + 1, document_id)
+                store_chunk(chunk_object)
+                chunk_summaries.append(chunk_object.summary)
+    else:
+        # Process a single markdown string
+        chunks = chunk_markdownv2(content, chunk_size=2000)
+        for i, chunk in enumerate(chunks):
+            chunk_object = process_chunk(chunk, i + 1, document_id)
+            store_chunk(chunk_object)
+            chunk_summaries.append(chunk_object.summary)
     
-    # Generate document-level summary
+    # Generate document-level summary from chunk summaries
     combined_chunk_summaries = "\n\n".join(chunk_summaries)
-
-    doc_content = get_title_and_summary(chunks[0] + combined_chunk_summaries, "8-10")
-    doc_keywords = get_keywords(content, 15)
+    
+    # Use the first piece of content for title context (or any other heuristic)
+    first_content = content[0] if isinstance(content, list) else content
+    
+    doc_content = get_title_and_summary(first_content + combined_chunk_summaries, "8-10")
+    
+    # If content is a list, combine all markdowns for keyword extraction
+    all_markdown = "\n".join(content) if isinstance(content, list) else content
+    doc_keywords = get_keywords(all_markdown, 15)
     doc_embedding = get_embedding(doc_content['summary'])
     
     # Finalize document record
@@ -227,3 +243,37 @@ async def process_document(content: str, path: str, source_type: str):
         embedding=doc_embedding
     )
 
+# async def process_document(content: str, path: str, source_type: str):
+#     """Process a single document end-to-end"""
+#     # Create initial document record
+#     document_id = await create_document_record(path, source_type)
+    
+#     # Process chunks
+#     chunks = chunk_markdownv2(content, chunk_size=2000)
+#     chunk_summaries = []
+    
+#     for i, chunk in enumerate(chunks):
+#         # Process individual chunk
+#         chunk_object = process_chunk(chunk, i+1, document_id)
+        
+#         # Store with document relationship
+#         store_chunk(chunk_object)
+        
+#         # Collect data for document summary
+#         chunk_summaries.append(chunk_object.summary)
+    
+#     # Generate document-level summary
+#     combined_chunk_summaries = "\n\n".join(chunk_summaries)
+
+#     doc_content = get_title_and_summary(chunks[0] + combined_chunk_summaries, "8-10")
+#     doc_keywords = get_keywords(content, 15)
+#     doc_embedding = get_embedding(doc_content['summary'])
+    
+#     # Finalize document record
+#     await finalize_document(
+#         document_id=document_id,
+#         title=doc_content['title'],
+#         summary=doc_content['summary'],
+#         keywords=doc_keywords,
+#         embedding=doc_embedding
+#     )

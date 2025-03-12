@@ -3,17 +3,26 @@ import asyncio
 import json
 import time
 import os
+from urllib.parse import urlparse
+import aiofiles
 import uvicorn
 from typing import Dict, List, Optional
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
+from llama_parse import LlamaParse
+from llama_index.core import SimpleDirectoryReader
 from agent_functions import ChartConfigList, PerformanceReport, Report, generate_kpi_sql_queries, generate_performance_report, generate_structured_report
+from chunk_md import process_document
+from crawler import crawl_website
 from lang_graph import handle_query
 from logging_config import logger
-from supabase_database import execute_sql_query, get_database_schema
+from supabase_database import execute_sql_query, get_conversation_messages, get_database_schema
 from websocket_manager import manager
 from redis_config import get_redis_client
+from dotenv import load_dotenv
+
+load_dotenv()
 
 redis_client = get_redis_client()
 
@@ -59,6 +68,9 @@ class Table(BaseModel):
 class KPIQueriesRetrieved(BaseModel):
     sql_queries: List[str]
 
+class UrlsRequest(BaseModel):
+    urls: List[str]
+
 # Middleware
 @app.middleware("http")
 async def log_requests(request, call_next):
@@ -83,8 +95,9 @@ async def websocket_endpoint(websocket: WebSocket):
 # Endpoints
 router = APIRouter(dependencies=[Depends(validate_api_key)])
 
-@router.post("/query", response_model=QueryResponse)
+@router.post("/query/{session_id}", response_model=QueryResponse)
 async def process_query(
+    session_id: str,
     request: QueryRequest, 
     auth: bool = Depends(validate_api_key)
 ):
@@ -93,7 +106,7 @@ async def process_query(
         start_time = time.time()
         
         # Execute workflow
-        result = await handle_query(request.text)
+        result = await handle_query(request.text, "u_1",session_id)
 
         print("Got handle_query result")
         
@@ -110,6 +123,24 @@ async def process_query(
         logger.error(f"Query failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Processing error")
 
+@router.get("/conversation/{session_id}")
+async def get_conversation(
+    session_id: str,
+    auth: bool = Depends(validate_api_key)
+):
+    """Retrieve conversation history for a session"""
+    try:
+        history = await get_conversation_messages(session_id)
+        
+        return {
+            "session_id": session_id,
+            "messages": history,
+        }
+    
+    except Exception as e:
+        logger.error(f"Error retrieving conversation: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error retrieving conversation")
+
 @router.get("/get-company-health", response_model=PerformanceReport)
 async def get_company_health(
     auth: bool = Depends(validate_api_key)
@@ -120,7 +151,7 @@ async def get_company_health(
     """
     try:
         # Retrieve the schema from your database
-        schema = get_database_schema()
+        schema = await get_database_schema()
         # If the returned schema has a "tables" key, use that; otherwise, assume it's a flat dict.
         tables = schema.get("tables", schema)
         
@@ -171,6 +202,86 @@ async def generate_report(
         logger.error(f"Report generation failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Report generation error")
 
+PDF_UPLOAD_FOLDER = "pdfs"
+GENERATED_MARKDOWN_FOLDER = "markdowns"
+
+os.makedirs(PDF_UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(GENERATED_MARKDOWN_FOLDER, exist_ok=True)
+
+@router.post("/process-pdf")
+async def process_pdf(
+    pdf: UploadFile = File(...),
+    premium_mode: bool = Form(False),
+    auth: bool = Depends(validate_api_key)
+):
+    """API endpoint to upload and process a PDF file."""
+    
+    if pdf.content_type != "application/pdf" or not pdf.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed.")
+    
+    try:
+        file_path = os.path.join(PDF_UPLOAD_FOLDER, pdf.filename)
+        file_content = await pdf.read()
+
+        async with aiofiles.open(file_path, "wb") as pdf_file:
+            await pdf_file.write(file_content)
+
+        # Use async parser and async loading
+        parser = LlamaParse(result_type="markdown", premium_mode=premium_mode)
+        file_extractor = {".pdf": parser}
+
+        print(f"Processing PDF: {file_path}")
+        # Use async version of load_data
+        reader = SimpleDirectoryReader(input_files=[file_path], file_extractor=file_extractor)
+        documents = await reader.aload_data()
+        markdown_content = "\n".join([doc.text for doc in documents])
+
+        markdown_filename = pdf.filename.replace(".pdf", ".md")
+        markdown_path = os.path.join(GENERATED_MARKDOWN_FOLDER, markdown_filename)
+
+        async with aiofiles.open(markdown_path, "w", encoding="utf-8") as md_file:
+            await md_file.write(markdown_content)
+
+        await process_document(markdown_content, file_path, "pdf")
+
+        return {"filename": pdf.filename, "status": "Processed successfully"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/process-website")
+async def process_website_endpoint(
+    request: UrlsRequest,
+    auth: bool = Depends(validate_api_key)
+):
+    try:
+        if not request.urls:
+            raise HTTPException(status_code=400, detail="No URLs provided.")
+        
+        results = await crawl_website(request.urls)
+
+        # Filter and gather successful results
+        successful_results = [(result.url, result.markdown) for result in results if result.success]
+        if not successful_results:
+            raise HTTPException(status_code=500, detail="Failed to crawl any URLs.")
+        
+        urls, markdowns = zip(*successful_results)
+        main_url = urlparse(urls[0]).netloc
+        
+        # Process the collected markdowns as a batch
+        await process_document(list(markdowns), main_url, "webpage")
+        
+        return {
+            "message": "Crawling and processing completed",
+            "base_url": main_url,
+            "processed_urls": urls
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing website: {str(e)}"
+        )
+
 app.include_router(router, prefix="/api/v1")
 
 if __name__ == "__main__":
@@ -179,5 +290,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         log_config=None,  # Disable default uvicorn logs
-        reload=True
+        reload=False  # Disable reload on Windows
     )

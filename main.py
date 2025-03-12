@@ -1,13 +1,14 @@
 import asyncio
 import json
 import os
+from urllib.parse import urlparse
 import aiofiles
 import aiohttp
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig, RateLimiter, CrawlerMonitor, DisplayMode, MemoryAdaptiveDispatcher
 from xml.etree import ElementTree
 from llama_parse import LlamaParse
 from llama_index.core import SimpleDirectoryReader
 from chunk_md import chunk_markdownv2, process_chunk, process_document, store_chunk
+from crawler import crawl_website
 from supabase_database import get_database_schema
 from dotenv import load_dotenv
 
@@ -43,87 +44,69 @@ async def save_markdown_file(result):
 async def main():
 
     
-    schema = get_database_schema()
-    schema_json = json.dumps(schema, indent=4)
-    print(schema_json)
+    # schema = get_database_schema()
+    # schema_json = json.dumps(schema, indent=4)
+    # print(schema_json)
 
     source_type = input("Enter source type (webpage/pdf): ").strip().lower()
 
     # Process Webpages
     if source_type == "webpage":
-
-        schema = get_database_schema()
-        schema_json = json.dumps(schema, indent=4)
-        print(schema_json)
         
-        urls = await get_urls()
+        urls = ["https://github.com/Rayan-Mansoor/React-Native-Doctor-Appointment-App"]
 
-        browser_config = BrowserConfig(headless=True, verbose=False)
-        run_config = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,
-            stream=False
-        )
+        results = await crawl_website(urls)
 
-        dispatcher = MemoryAdaptiveDispatcher(
-            memory_threshold_percent=80.0,
-            check_interval=1.0,
-            max_session_permit=20,
-            rate_limiter=RateLimiter(
-                base_delay=(0.5, 1.0),
-                max_delay=10.0,
-                max_retries=2
-            ),
-            monitor=CrawlerMonitor(
-                display_mode=DisplayMode.AGGREGATED
-            )
-        )
+        # Extract markdowns and associated URLs
+        successful_results = [(result.url, result.markdown) for result in results if result.success]
 
-        async with AsyncWebCrawler(config=browser_config) as crawler:
+        # Separate URLs and markdowns
+        urls, markdowns = zip(*successful_results)
 
-            results = await crawler.arun_many(
-                urls=urls,
-                config=run_config,
-                dispatcher=dispatcher
-            )
+        # Extract base domain from the first successful URL
+        main_url = urlparse(urls[0]).netloc  # Example: "example.com"
 
-            for result in results:
-                if result.success:
-                    chunks = chunk_markdownv2(result.markdown, chunk_size=2000)
-                    for i, chunk in enumerate(chunks):
-                        print(f"Chunk {i + 1}: {chunk}\n")
-                        chunk_object = process_chunk(chunk, i + 1, result.url, "webpage")
-                        store_chunk(chunk_object)
-                else:
-                    print(f"Failed to crawl {result.url}: {result.error_message}")
+        # Call process_document with a list of markdowns
+        await process_document(list(markdowns), main_url, "webpage")
+
+            # for result in results:
+            #     if result.success:
+            #         chunks = chunk_markdownv2(result.markdown, chunk_size=2000)
+            #         for i, chunk in enumerate(chunks):
+            #             print(f"Chunk {i + 1}: {chunk}\n")
+            #             chunk_object = process_chunk(chunk, i + 1, result.url, "webpage")
+            #             store_chunk(chunk_object)
+            #     else:
+            #         print(f"Failed to crawl {result.url}: {result.error_message}")
     
     elif source_type == "pdf":
-        md_folder = "markdown"  # Folder where your extracted Markdown files are stored
-        md_files = [os.path.join(md_folder, f) for f in os.listdir(md_folder) if f.endswith(".md")]
+    #     md_folder = "markdown"  # Folder where your extracted Markdown files are stored
+    #     md_files = [os.path.join(md_folder, f) for f in os.listdir(md_folder) if f.endswith(".md")]
 
-        for md_path in md_files:
-            print(f"Processing Markdown File: {md_path}")
+    #     for md_path in md_files:
+    #         print(f"Processing Markdown File: {md_path}")
 
-            # Read the markdown file
-            with open(md_path, "r", encoding="utf-8") as f:
-                markdown_content = f.read()
+    #         # Read the markdown file
+    #         with open(md_path, "r", encoding="utf-8") as f:
+    #             markdown_content = f.read()
 
-            # Chunk and store the extracted markdown
-            await process_document(markdown_content, md_path, "pdf")
+    #         # Chunk and store the extracted markdown
+    #         await process_document(markdown_content, md_path, "pdf")
 
-        # pdf_folder = "pdfs"
-        # pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.endswith(".pdf")]
+        pdf_folder = "pdfs"
+        pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.endswith(".pdf")]
 
-        # parser = LlamaParse(result_type="markdown")
-        # file_extractor = {".pdf": parser}
+        parser = LlamaParse(result_type="markdown")
+        file_extractor = {".pdf": parser}
 
-        # for pdf_path in pdf_files:
-        #     print(f"Processing PDF: {pdf_path}")
+        for pdf_path in pdf_files:
+            print(f"Processing PDF: {pdf_path}")
 
-        #     # Convert PDF to Markdown
-        #     documents = SimpleDirectoryReader(input_files=[pdf_path], file_extractor=file_extractor).load_data()
-        #     markdown_content = "\n".join([doc.text for doc in documents])
+            # Convert PDF to Markdown
+            documents = SimpleDirectoryReader(input_files=[pdf_path], file_extractor=file_extractor).load_data()
+            markdown_content = "\n".join([doc.text for doc in documents])
 
-        #     await process_document(markdown_content, pdf_path, "pdf")
+            await process_document(markdown_content, pdf_path, "pdf")
 
             # # Chunk and store the extracted markdown
             # chunks = chunk_markdownv2(markdown_content, chunk_size=2000)

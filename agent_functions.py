@@ -60,6 +60,9 @@ class ClassifyInput(BaseModel):
 class LLMResponse(BaseModel):
     content: str
 
+class RefineQueryResponse(BaseModel):
+    final_query: str
+
 class KPIQueriesRetrieved(BaseModel):
     sql_queries: List[str]
 
@@ -88,14 +91,52 @@ def call_llm(system_prompt: str, user_content: str) -> LLMResponse:
     except Exception as e:
         print(f"LLM call failed: {e}")
         return LLMResponse(content=f"Error: {str(e)}")
+    
+def refine_query(context: dict) -> RefineQueryResponse:
+    
+    system_prompt = f"""
+    You are an expert query rewriter specialized in enhancing user queries for improved document retrieval using cosine similarity. Given the conversation history and the current query, your task is to generate a final, self-contained query that clearly captures the user's intent. 
 
-def classify_user_input(query: str) -> ClassifyInput:
+    Guidelines:
+    - Analyze the conversation history to understand context, including previous questions and answers.
+    - Rewrite ambiguous or context-dependent queries to include relevant details from the conversation.
+    - Ensure that the final query is explicit and can stand on its own for retrieving the most relevant chunks.
+    - Do not include any additional commentary; output only the refined query.
+
+    For example, if the conversation includes "How many items in store?" and the current query is "Name them," it can be rewritten as "Name the items in the store."
+
+    Apply these guidelines to every query to generate the most suitable and context-aware final query.
+
+    Return your answer as a JSON object following this schema:
+    {json.dumps(RefineQueryResponse.model_json_schema(), indent=2)}
+    """
+    try:
+        context_json = json.dumps(context, indent=2)
+
+        chat_completion = groq.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": context_json}
+            ],
+            model="llama-3.3-70b-versatile",
+            response_format={"type": "json_object"}
+        )
+
+        return RefineQueryResponse.model_validate_json(chat_completion.choices[0].message.content)
+    
+    except Exception as e:
+        print(f"LLM call failed: {e}")
+        return RefineQueryResponse(content=f"Error: {str(e)}")
+
+def classify_user_input(context: dict) -> ClassifyInput:
+
     system_prompt = f"""
     You are an assistant that must decide whether to use Retrieval Augmented Generation (RAG) for answering a user's query.
+    Consider both the current query and any conversation history (if given) when making your decision.
 
     Instructions:
-    1. If the user's query is a simple conversation or a generic question (e.g. "Hi, my name is Rayan" or "What is the capital of France?"), answer using your own knowledge without retrieving any external data. In these cases, set "needs_rag" to false and do not include "data_source".
-    2. If the query refers to the user's own data or explicitly instructs you to search for data (e.g. "find my recent orders" or "only look for the answer in the SQL database"), then you must perform RAG. Set "needs_rag" to true.
+    1. If the query is conversational or doesn't require external data (e.g. greetings, general knowledge ie Questions You can answer on your own), answer using your own knowledge without retrieving any external data. In these cases, set "needs_rag" to false and do not include "data_source".
+    2. If the query references previous data discussions, asks for user-specific data or explicitly mentions data sources (Questions You can not answer on your own without specific context), then you must perform RAG. Set "needs_rag" to true.
     - If the query specifically mentions a data source:
         - Use "sql" if it instructs you to look only in the SQL database.
         - Use "docs" if it instructs you to search only in the documents.
@@ -106,6 +147,8 @@ def classify_user_input(query: str) -> ClassifyInput:
     """
 
     try:
+        context_json = json.dumps(context, indent=2)
+
         chat_completion = groq.chat.completions.create(
             messages=[
                 {
@@ -114,7 +157,7 @@ def classify_user_input(query: str) -> ClassifyInput:
                 },
                 {
                     "role": "user",
-                    "content": query,
+                    "content": context_json,
                 },
             ],
             model="llama-3.3-70b-versatile",
@@ -130,22 +173,35 @@ def classify_user_input(query: str) -> ClassifyInput:
             "details": str(e)
         }
 
-def select_relevant_documents(documents: List[Document], user_query: str) -> Doc_Ids:
-    system_prompt = f"""
-        You are an expert document selector. Given a user query and a list of documents (each with an ID, title, and summary), analyze which documents' full content is most likely to contain information relevant to the query. You may select zero, one, or multiple documents.
-        Base selections strictly on whether the document's FULL CONTENT (not just summary) could answer the query.
-        Return a list of just the ids of the documents you select. If no documents are relevant, return an empty list.
 
-        The JSON object must use the following schema:
-        {json.dumps(Doc_Ids.model_json_schema(), indent=2)}"""
+
+def select_relevant_documents(documents: List[Document], context: dict) -> Doc_Ids:
+    system_prompt = f"""
+    You are an expert document selector. Analyze which documents could help answer the query considering both the current request and conversation history (if given).
+
+    Key Considerations:
+    1. Analyze the FULL CONVERSATION CONTEXT to understand:
+       - References to previous information
+       - Ongoing discussions or analysis threads
+       - Implicit context for the current query
+    2. Document selection criteria:
+       - Select documents whose FULL CONTENT (not just summary) might conatin information that could answer the query
+       - Include documents needed to understand context references
+       - Prioritize documents mentioned in conversation history
+    3. Return only document IDs - empty list if none relevant
+
+    Required JSON schema:
+    {json.dumps(Doc_Ids.model_json_schema(), indent=2)}
+    """
     
     try:
+        context_json = json.dumps(context, indent=2)
         docs_json = json.dumps([doc.model_dump() for doc in documents], indent=2)
 
         response = groq.chat.completions.create(
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps({"user_query": user_query, "documents": docs_json})}
+                {"role": "user", "content": json.dumps({"comtext": context_json, "documents": docs_json})}
             ],
             response_format={ "type": "json_object" },
             model="llama-3.3-70b-versatile"
@@ -160,7 +216,7 @@ def select_relevant_documents(documents: List[Document], user_query: str) -> Doc
             "details": str(e)
         }
 
-def select_relevant_sql_tables(sql_schema: Dict[str, Any], user_query: str) -> TablesRetrieved:
+def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> TablesRetrieved:
     system_prompt = f"""
         You are an expert SQL assistant with two tasks:
         1. Select tables relevant to answering the user query based on their columns.
@@ -171,27 +227,30 @@ def select_relevant_sql_tables(sql_schema: Dict[str, Any], user_query: str) -> T
         - Column types may have '!' indicating required (ignore this for querying).
 
         Instructions:
-        1. **Strictly select tables** whose columns are needed to answer the query.
-        2. **Determine if the query is asking for multiple unrelated pieces of data.**
-        - If different pieces of information **cannot be naturally joined**, create separate queries.
-        - If all requested data is logically related (via joins), return a single optimized query.
-        3. **Write SQL that:**
-        - Uses only selected tables and their exact column names.
-        - Includes required clauses (WHERE, JOINs, etc.).
-        - Matches the query intent precisely.
-        - Handles potential NULLs if needed.
+        1. **Analyze the full conversation context** when selecting tables and generating queries.
+        2. **Handle implicit references** to previous queries or data.
+        3. **Strictly select tables** whose columns are needed to answer the query.
+        4. **Determine if the query is asking for multiple unrelated pieces of data.**
+            - If different pieces of information **cannot be naturally joined**, create separate queries.
+            - If all requested data is logically related (via joins), return a single optimized query.
+        5. **Write SQL that:**
+            - Uses only selected tables and their exact column names.
+            - Includes required clauses (WHERE, JOINs, etc.).
+            - Matches the query intent precisely.
+            - Handles potential NULLs if needed.
 
         Return JSON with:
         {json.dumps(TablesRetrieved.model_json_schema(), indent=2)}
         """
     
     try:
+        context_json = json.dumps(context, indent=2)
         schema_json = json.dumps(sql_schema, indent=4)
 
         response = groq.chat.completions.create(
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps({"user_query": user_query, "sql_schema": schema_json})}
+                {"role": "user", "content": json.dumps({"context": context_json, "sql_schema": schema_json})}
             ],
             response_format={"type": "json_object"},
             model="llama-3.3-70b-versatile"
@@ -205,6 +264,8 @@ def select_relevant_sql_tables(sql_schema: Dict[str, Any], user_query: str) -> T
             "error": "Failed to select relevant SQL sources.",
             "details": str(e)
         }
+
+
 
 def generate_kpi_sql_queries(sql_schema: Dict[str, Any]) -> KPIQueriesRetrieved:
     system_prompt = f"""
@@ -324,24 +385,44 @@ def generate_structured_report(context_data: Dict[str, Any]) -> Report:
             "details": str(e)
         }
 
-def get_chart_configs(csv_list: List[str], user_query: str) -> ChartConfigList:
+def get_chart_configs(csv_list: List[str], context: dict) -> ChartConfigList:
     csv_context = "\n\n---\n\n".join(csv_list)
     
     system_prompt = f"""
-        You are a data visualization expert. Given a user query and a list of one or more CSV samples representing datasets, Your task is as follows:
-        1. Thoroughly analyze each CSV sample to understand the its context and overall structure and does it relate to the user's query.
+        You are a data visualization expert. Given conversation context and a list of one or more CSV samples representing datasets, Your task is as follows:
+        1. Thoroughly analyze each CSV sample to understand its context and overall structure and how it relates to the user's query or conversation history (if given).
         2. Identify all potential pairs of columns and the most appropriate chart type that can create meaningful visualizations.
-        3. Based on the user query, decide whether to generate (0-3) chart configurations depending on the value they would add. If only one CSV is provided with a limited number of columns (e.g. only three columns), output only one chart configuration that best addresses the query. Generate multiple unique chart configurations only when multiple CSVs or CSVs with many columns are available, and each configuration provides a distinct insight. If the user query and the provided CSVs are competely unrelated, produce zero chart configs
-        4. Provide a concise and descriptive title for each chart configuration.
-        5. Output your results as a JSON object that strictly adheres to the following schema:
+        3. **Column Selection Criteria:**
+        - **Label Column (X-axis/Grouping):** 
+            * Typically categorical values (e.g., region, date, category)
+            * Must be distinct values that group/classify data
+            * Cannot contain duplicate values when used for grouping
+        - **Value Column (Y-axis/Measurement):** 
+            * Numerical values that represent measurements (e.g., sales, counts, percentages)
+            * Should be aggregatable metrics (sum, average, etc.)
+        - **Critical Rule:** Label and value columns MUST be different columns - never use the same column for both roles
+        
+        4. Based on the user query, decide whether to generate (0-3) chart configurations:
+        - Generate 1 config for simple CSVs (<4 columns)
+        - Multiple configs only when showing different perspectives (when multiple CSVs or CSVs with many columns are available)
+        - No configs if CSV has 1 column only or the conversation and the provided CSVs are competely unrelated
+        
+        5. Provide concise, descriptive titles showing: 
+        - Measured value
+        - Grouping dimension
+        - Time period (if relevant)
+        
+        6. Output JSON object strictly following schema:
         {json.dumps(ChartConfigList.model_json_schema(), indent=2)}
     """
 
     try:
+        context_json = json.dumps(context, indent=2)
+        
         response = groq.chat.completions.create(
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"User Query: {user_query}\n\nCSV Samples:\n{csv_context}"}
+                {"role": "user", "content": f"Context: {context_json}\n\nCSV Samples:\n{csv_context}"}
             ],
             model="llama-3.3-70b-versatile",
             response_format={"type": "json_object"},

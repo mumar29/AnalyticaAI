@@ -8,7 +8,8 @@ create table conversations (
 create table messages (
     id bigserial primary key,
     conversation_id bigint references conversations(id),
-    role text, -- User or AI
-    content text,
+    role varchar, -- User or AI
+    text_content text, -- Stores simple string messages
+    json_content jsonb,
     created_at timestamp default now()
 );

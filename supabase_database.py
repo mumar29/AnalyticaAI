@@ -2,6 +2,7 @@
 import os
 import json
 from typing import Any, Dict, List, Optional, Tuple
+from pydantic import BaseModel
 from supabase import create_client, Client
 
 from LLM_analysis import get_embedding
@@ -14,6 +15,12 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
+class ConversationMessage(BaseModel):
+    role: str  # "user" or "AI"
+    content: str
+    timestamp: float
+
 def execute_sql_query(query: str) -> Optional[List[dict]]:
     try:
         response = supabase.rpc("execute_sql", {"query": query}).execute()
@@ -22,7 +29,7 @@ def execute_sql_query(query: str) -> Optional[List[dict]]:
     except Exception as e:
         raise
 
-def get_database_schema():
+async def get_database_schema():
     # Unified SQL query to fetch both schema details and table-level view access.
     query = """
         SELECT 
@@ -221,4 +228,96 @@ async def retrieve_chunks_tables(chunk_ids: List[int]) -> List[str]:
         
     except Exception as e:
         print(f"Error retrieving documentation: {e}")
+        return []
+
+async def create_conversation_session(user_id): 
+    try:   
+        # If no existing conversation, create a new one
+        response = supabase.table("conversations").insert(
+            {"user_id": user_id}
+        ).execute()
+
+        return response.data[0]["id"]
+
+    except Exception as e:
+        print(f"Error creating new conversation session: {e}")
+        return None
+
+async def get_conversation_session(user_id, conversation_id): 
+    try:   
+        # If no existing conversation, create a new one
+        response = supabase.table("conversations") \
+            .select("id, summary") \
+            .eq("user_id", user_id) \
+            .eq("id", conversation_id) \
+            .execute()
+
+        if response.data:
+            return response.data[0]
+        else:
+            new_conversation_id = await create_conversation_session(user_id)
+            return new_conversation_id
+
+    except Exception as e:
+        print(f"Error retrieving conversation summary: {e}")
+        return None
+
+async def update_conversation_summary(user_id, conversation_id, summary):
+    """Update the summary of a conversation for a given user."""
+    try:   
+        # If no existing conversation, create a new one
+        response = supabase.table("conversations").update(
+            {"summary": summary}
+        ).eq("user_id", user_id).eq("id", conversation_id).execute()  
+
+        return response.data[0]["id"]
+
+    except Exception as e:
+        print(f"Error updating conversation summary: {e}")
+        return None 
+
+async def get_conversation_messages(conversation_id, limit: Optional[int] = None)-> List[ConversationMessage] | None:
+    try: 
+
+        query = (
+            supabase.table("messages")
+            .select("role", "text_content", "json_content", "created_at")
+            .eq("conversation_id", conversation_id)
+            .order("created_at", desc=True)  # Order by newest first
+        )
+
+        if limit:
+            query = query.limit(limit)
+
+        response = query.execute()
+
+        if not response.data:
+            return None
+        
+        return response.data
+    
+    except Exception as e:
+        print(f"Error retrieving conversation history: {e}")
+        return None
+    
+async def save_converation_message(conversation_id, role, text_content, json_content = None):
+    try:
+
+        if text_content is None:
+            raise ValueError("Text content must be provided.")
+
+        response = supabase.table("messages").insert({
+            "conversation_id": conversation_id,
+            "role": role,
+            "text_content": text_content,
+            "json_content": json_content
+        }).execute()
+    
+        if not response.data:
+            return []
+        
+        return response.data
+
+    except Exception as e:
+        print(f"Error saving conversation message: {e}")
         return []

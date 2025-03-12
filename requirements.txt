@@ -12,3 +12,4 @@ keybert
 tiktoken
 torch
 sentence_transformers
+playwright

@@ -8,7 +8,7 @@ from groq import Groq
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
+from llm_provider import generate_completion
 
 class ChartConfig(BaseModel):
     user_query: str
@@ -74,19 +74,8 @@ class Report(BaseModel):
 
 def call_llm(system_prompt: str, user_content: str) -> LLMResponse:
     try:
-        system_prompt += f""" Return your answer as a JSON object following this schema:
-        {json.dumps(LLMResponse.model_json_schema(), indent=2)}"""
-
-        chat_completion = groq.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            model="llama-3.3-70b-versatile",
-            response_format={"type": "json_object"}
-        )
-
-        return LLMResponse.model_validate_json(chat_completion.choices[0].message.content)
+        response_content = generate_completion(system_prompt, user_content, LLMResponse.model_json_schema())
+        return LLMResponse.model_validate_json(response_content)
     
     except Exception as e:
         print(f"LLM call failed: {e}")
@@ -113,16 +102,9 @@ def refine_query(context: dict) -> RefineQueryResponse:
     try:
         context_json = json.dumps(context, indent=2)
 
-        chat_completion = groq.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": context_json}
-            ],
-            model="llama-3.3-70b-versatile",
-            response_format={"type": "json_object"}
-        )
+        response_content = generate_completion(system_prompt, context_json, RefineQueryResponse.model_json_schema())
 
-        return RefineQueryResponse.model_validate_json(chat_completion.choices[0].message.content)
+        return RefineQueryResponse.model_validate_json(response_content)
     
     except Exception as e:
         print(f"LLM call failed: {e}")
@@ -141,30 +123,14 @@ def classify_user_input(context: dict) -> ClassifyInput:
         - Use "sql" if it instructs you to look only in the SQL database.
         - Use "docs" if it instructs you to search only in the documents.
     - If no specific data source is mentioned but RAG is needed, use "both" to indicate that both SQL data and documents should be considered.
-    
-    Return your answer as a JSON object following this schema:
-    {json.dumps(ClassifyInput.model_json_schema(), indent=2)}
     """
 
     try:
         context_json = json.dumps(context, indent=2)
 
-        chat_completion = groq.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-                {
-                    "role": "user",
-                    "content": context_json,
-                },
-            ],
-            model="llama-3.3-70b-versatile",
-            response_format={"type": "json_object"},
-        )
+        response_content = generate_completion(system_prompt, context_json, ClassifyInput.model_json_schema())
 
-        return ClassifyInput.model_validate_json(chat_completion.choices[0].message.content)
+        return ClassifyInput.model_validate_json(response_content)
 
     except Exception as e:
         print(f"Error getting chart config: {e}")
@@ -189,25 +155,16 @@ def select_relevant_documents(documents: List[Document], context: dict) -> Doc_I
        - Include documents needed to understand context references
        - Prioritize documents mentioned in conversation history
     3. Return only document IDs - empty list if none relevant
-
-    Required JSON schema:
-    {json.dumps(Doc_Ids.model_json_schema(), indent=2)}
     """
     
-    try:
+    try:        
         context_json = json.dumps(context, indent=2)
         docs_json = json.dumps([doc.model_dump() for doc in documents], indent=2)
+        user_content = f"context: {context_json}\n\ndocuments:\n{docs_json}"
 
-        response = groq.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps({"comtext": context_json, "documents": docs_json})}
-            ],
-            response_format={ "type": "json_object" },
-            model="llama-3.3-70b-versatile"
-        )
+        response_content = generate_completion(system_prompt, user_content, Doc_Ids.model_json_schema())
 
-        return Doc_Ids.model_validate_json(response.choices[0].message.content)
+        return Doc_Ids.model_validate_json(response_content)
         
     except Exception as e:
         print(f"Error selecting relevant documents: {e}")
@@ -238,25 +195,16 @@ def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> Tab
             - Includes required clauses (WHERE, JOINs, etc.).
             - Matches the query intent precisely.
             - Handles potential NULLs if needed.
-
-        Return JSON with:
-        {json.dumps(TablesRetrieved.model_json_schema(), indent=2)}
         """
     
     try:
         context_json = json.dumps(context, indent=2)
         schema_json = json.dumps(sql_schema, indent=4)
+        user_content = f"context: {context_json}\n\nsql_schema:\n{schema_json}"
 
-        response = groq.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps({"context": context_json, "sql_schema": schema_json})}
-            ],
-            response_format={"type": "json_object"},
-            model="llama-3.3-70b-versatile"
-        )
+        response_content = generate_completion(system_prompt, user_content, TablesRetrieved.model_json_schema())
         
-        return TablesRetrieved.model_validate_json(response.choices[0].message.content)
+        return TablesRetrieved.model_validate_json(response_content)
         
     except Exception as e:
         print(f"Error selecting relevant SQL sources: {e}")
@@ -264,7 +212,6 @@ def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> Tab
             "error": "Failed to select relevant SQL sources.",
             "details": str(e)
         }
-
 
 
 def generate_kpi_sql_queries(sql_schema: Dict[str, Any]) -> KPIQueriesRetrieved:
@@ -281,27 +228,17 @@ def generate_kpi_sql_queries(sql_schema: Dict[str, Any]) -> KPIQueriesRetrieved:
             - Each query should use only the tables and their exact column names as provided in the schema.
             - Use appropriate SQL clauses (WHERE, GROUP BY, JOIN, etc.) to ensure meaningful results.
         3. If the schema does not contain any tables or columns that can provide KPI information, output a clear message stating that no KPI queries can be generated.
-
-        Return the result as a JSON object with the following structure:
-        {json.dumps(KPIQueriesRetrieved.model_json_schema(), indent=2)}
     """
     
     try:
+
         # Construct the schema JSON from the provided sql_schema dictionary.
         schema_json = json.dumps(sql_schema, indent=2)
 
-        # Call the LLM (using a hypothetical groq.chat.completions.create API call)
-        response = groq.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps({"sql_schema": schema_json})}
-            ],
-            response_format={"type": "json_object"},
-            model="llama-3.3-70b-versatile"
-        )
+        response_content = generate_completion(system_prompt, schema_json, KPIQueriesRetrieved.model_json_schema())
         
         # Validate and return the response using the KPIQueriesRetrieved model.
-        return KPIQueriesRetrieved.model_validate_json(response.choices[0].message.content)
+        return KPIQueriesRetrieved.model_validate_json(response_content)
         
     except Exception as e:
         print(f"Error generating KPI SQL queries: {e}")
@@ -321,27 +258,17 @@ def generate_performance_report(sql_results: List[Dict[str, Any]]) -> Performanc
         2. Summarize the data into a coherent narrative that highlights strengths, weaknesses, trends, and any noteworthy insights.
         3. Generate a user-friendly and professional report using clear, concise language suitable for business executives and stakeholders.
         4. Avoid technical jargon and focus on actionable insights and a high-level overview.
-
-        Return the result as a JSON object with the following structure:
-        {json.dumps(PerformanceReport.model_json_schema(), indent=2)}
     """
     
     try:
+
         # Convert the sql_results list into a JSON string.
         results_json = json.dumps(sql_results, indent=2)
-        
-        # Call the LLM (using a hypothetical groq.chat.completions.create API call)
-        response = groq.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps({"sql_results": results_json})}
-            ],
-            response_format={"type": "json_object"},
-            model="llama-3.3-70b-versatile"
-        )
+
+        response_content = generate_completion(system_prompt, results_json, PerformanceReport.model_json_schema())
         
         # Validate and return the response using the PerformanceReport model.
-        return PerformanceReport.model_validate_json(response.choices[0].message.content)
+        return PerformanceReport.model_validate_json(response_content)
         
     except Exception as e:
         print(f"Error generating performance report: {e}")
@@ -359,24 +286,15 @@ def generate_structured_report(context_data: Dict[str, Any]) -> Report:
         4. Use bullet points or numbered lists where applicable to organize information.
 
         Return the full working HTML document in the output.
-
-        Return the result as a JSON object with the following structure:
-        {json.dumps(Report.model_json_schema(), indent=2)}
         """
     
     try:
+
         schema_json = json.dumps(context_data, indent=2)
 
-        response = groq.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": schema_json}
-            ],
-            response_format={"type": "json_object"},
-            model="llama-3.3-70b-versatile"
-        )
+        response_content = generate_completion(system_prompt, schema_json, Report.model_json_schema())
         
-        return Report.model_validate_json(response.choices[0].message.content)
+        return Report.model_validate_json(response_content)
         
     except Exception as e:
         print(f"Error generating report: {e}")
@@ -386,7 +304,6 @@ def generate_structured_report(context_data: Dict[str, Any]) -> Report:
         }
 
 def get_chart_configs(csv_list: List[str], context: dict) -> ChartConfigList:
-    csv_context = "\n\n---\n\n".join(csv_list)
     
     system_prompt = f"""
         You are a data visualization expert. Given conversation context and a list of one or more CSV samples representing datasets, Your task is as follows:
@@ -411,24 +328,16 @@ def get_chart_configs(csv_list: List[str], context: dict) -> ChartConfigList:
         - Measured value
         - Grouping dimension
         - Time period (if relevant)
-        
-        6. Output JSON object strictly following schema:
-        {json.dumps(ChartConfigList.model_json_schema(), indent=2)}
     """
 
     try:
+        csv_context = "\n\n---\n\n".join(csv_list)
         context_json = json.dumps(context, indent=2)
-        
-        response = groq.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Context: {context_json}\n\nCSV Samples:\n{csv_context}"}
-            ],
-            model="llama-3.3-70b-versatile",
-            response_format={"type": "json_object"},
-        )
-        
-        return ChartConfigList.model_validate_json(response.choices[0].message.content)
+        user_content = f"Context: {context_json}\n\nCSV Samples:\n{csv_context}"
+
+        response_content = generate_completion(system_prompt, user_content, ChartConfigList.model_json_schema())
+
+        return ChartConfigList.model_validate_json(response_content)
 
     except Exception as e:
         print(f"Error getting chart config: {e}")

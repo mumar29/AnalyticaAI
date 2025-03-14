@@ -1,5 +1,6 @@
 # main.py
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import time
 import os
@@ -17,7 +18,7 @@ from chunk_md import process_document
 from crawler import crawl_website
 from lang_graph import handle_query
 from logging_config import logger
-from supabase_database import execute_sql_query, get_conversation_messages, get_database_schema, get_user_conversations
+from supabase_database import set_llm_api_key, execute_sql_query, fetch_llm_api_key, get_conversation_messages, get_database_schema, get_user_conversations
 from websocket_manager import manager
 from redis_config import get_redis_client
 from dotenv import load_dotenv
@@ -26,12 +27,32 @@ load_dotenv()
 
 redis_client = get_redis_client()
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event to fetch API key once on startup."""
+    credentials = fetch_llm_api_key()  # Fetch and store the API key on startup
+    if credentials:
+
+        provider = credentials["provider"]
+        api_key = credentials["api_key"]
+
+        if provider == "GROQ":
+            os.environ["GROQ_API_KEY"] = api_key
+            print("GROQ API key set successfully.")
+        elif provider == "GEMINI":
+            os.environ["GEMINI_API_KEY"] = api_key
+            print("GEMINI API key set successfully.")
+        else:
+            print(f"Unsupported provider: {provider}")
+    yield  # Let FastAPI run
+
 app = FastAPI(
     title="RAG Agent API",
     description="Multi-source RAG System with SQL/Document Integration",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
 # Security
@@ -71,6 +92,10 @@ class KPIQueriesRetrieved(BaseModel):
 class UrlsRequest(BaseModel):
     urls: List[str]
 
+class LLMKeyRequest(BaseModel):
+    provider: str
+    key: str
+
 # Middleware
 @app.middleware("http")
 async def log_requests(request, call_next):
@@ -94,6 +119,21 @@ async def websocket_endpoint(websocket: WebSocket):
 
 # Endpoints
 router = APIRouter(dependencies=[Depends(validate_api_key)])
+
+@router.post("/set-llm-api-key")
+async def set_llm_api_key_endpoint(
+    request: LLMKeyRequest,
+    auth: bool = Depends(validate_api_key)
+):
+    """Update LLM api key"""
+    try:
+        response = await set_llm_api_key(request.provider, request.key)
+        
+        return response
+
+    except Exception as e:
+        logger.error(f"Error updating LLM api key: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error updating LLM api key")
 
 @router.post("/query/{session_id}", response_model=QueryResponse)
 async def process_query_endpoint(

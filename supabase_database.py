@@ -15,6 +15,62 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+ALLOWED_PROVIDERS = {"GROQ", "GEMINI"}
+
+async def set_llm_api_key(provider: str, api_key: str) -> Dict[str, Any]:
+    """Update the API key in the database and set it as an environment variable."""
+    if provider not in ALLOWED_PROVIDERS:
+        return {
+            "success": False,
+            "message": f"Invalid provider '{provider}'. Allowed values: {ALLOWED_PROVIDERS}",
+        }
+
+    try:
+        # Delete existing API key to ensure only one row exists
+        supabase.table("api_keys").delete().neq("id", 0).execute()
+
+        # Insert the new API key
+        response = (
+            supabase.table("api_keys")
+            .insert({"provider": provider, "api_key": api_key})
+            .execute()
+        )
+
+        if response.data:
+            # Remove all previous API key environment variables
+            for allowed_provider in ALLOWED_PROVIDERS:
+                env_var_name = f"{allowed_provider}_API_KEY"
+                if env_var_name in os.environ:
+                    del os.environ[env_var_name]  # Remove previous API key
+
+            # Set the new API key in the environment variable
+            current_env_var = f"{provider}_API_KEY"
+            os.environ[current_env_var] = api_key
+
+            # Clear the cached client so that subsequent calls reinitialize the LLM provider
+            from llm_provider import LLMProvider  # Adjust the import as needed
+            LLMProvider._client = None
+            LLMProvider._provider = None
+
+            return {"success": True, "message": f"{provider} API key updated successfully"}
+        else:
+            return {"success": False, "message": "Failed to update API key"}
+
+    except Exception as e:
+        return {"success": False, "message": f"Database error while updating API key: {str(e)}"}
+
+def fetch_llm_api_key() -> Optional[str]:
+    """Retrieve the API key for a given user ID from Supabase."""
+    try:
+        response = (
+            supabase.table("api_keys")
+            .select("provider","api_key")
+            .maybe_single()
+            .execute()
+        )
+        return response.data if response.data else None
+    except Exception:
+        return None
 
 class ConversationMessage(BaseModel):
     role: str  # "user" or "AI"

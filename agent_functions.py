@@ -1,30 +1,35 @@
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Set
 import os
 import json
 import uvicorn
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Extra
 from groq import Groq
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from llm_provider import generate_completion
 
-class ChartConfig(BaseModel):
-    user_query: str
-    csv_list: List[str]
+class IndexedCSV(BaseModel):
+    index: int
+    content: str
+
+class CSVCollection(BaseModel):
+    csvs: List[IndexedCSV]
 
 class Mapping(BaseModel):
     label_column: str
     value_column: str
 
 class Chart(BaseModel):
+    csv_index: int
     title: str
     type: Literal["bar", "line", "pie", "radar", "doughnut", "scatter", "bubble", "polararea"]
     mapping: Mapping
 
 class ChartConfigList(BaseModel):
     charts: List[Chart]
+    csv_collection: CSVCollection
 
 class Document(BaseModel):
     id: int
@@ -275,19 +280,23 @@ def generate_performance_report(sql_results: List[Dict[str, Any]]) -> Performanc
         return PerformanceReport(report=f"Error: {str(e)}")
     
 def generate_structured_report(context_data: Dict[str, Any]) -> Report:
-    system_prompt = f"""You are an HTML Report Generator that produces complete, professional business reports in HTML format.
-        Generate a professional report based on the provided context. The report should be centered around the user's query and include only the information from the context that is directly relevant to that query.
-        Dont straight away pick the relevant iformation from the context anf start the report from it, first introduce the topic (if this information isnt present in the context, you should include it youself). Similary include additional relevant insights or details that add value to the final report in context-appropriate sections. Make future predictictions if applicable and give suggestions
-        
-        Please ensure that:
-        1. The output is a complete, valid HTML document, including <html>, <head>, and <body> tags.
-        2. Use appropriate headings (e.g., <h1>, <h2>) and paragraphs (<p>) to structure the report.
-        3. Apply professional styling using inline CSS or internal <style> tags to ensure the report looks visually appealing and polished.
-        4. Use bullet points or numbered lists where applicable to organize information.
+    system_prompt = f"""
+    You are an HTML Report Generator that produces complete, professional business reports in HTML format.
 
-        Return the full working HTML document in the output.
-        """
-    
+    Your task is to generate a professional report based on the provided context, the user's current query, and any relevant past conversation messages. The report should be centered on the user's latest query, but if previous conversation messages (including both user queries and AI responses) contain additional details or data that relate to this topic, you must integrate that information to create a richer, more comprehensive report.
+
+    Guidelines:
+    1. **Relevance Check:** Review the entire conversation history. Use the past conversation data only if it is directly related to the current query. If there are multiple queries on similar topics, combine them to provide a complete view.
+    2. **Introduction:** Start by introducing the topic in your own words if it’s not already fully covered in the provided context.
+    3. **Detailed Analysis:** Include any additional insights, future predictions, or suggestions that enhance the report. Organize the information into sections using appropriate headings.
+    4. **Formatting:** 
+    - Output a complete, valid HTML document including `<html>`, `<head>`, and `<body>` tags.
+    - Use inline CSS or internal `<style>` tags for professional styling.
+    - Use bullet points or numbered lists where applicable.
+
+    Return the full working HTML document in the output.
+    """
+
     try:
 
         schema_json = json.dumps(context_data, indent=2)
@@ -306,38 +315,63 @@ def generate_structured_report(context_data: Dict[str, Any]) -> Report:
 def get_chart_configs(csv_list: List[str], context: dict) -> ChartConfigList:
     
     system_prompt = f"""
-        You are a data visualization expert. Given conversation context and a list of one or more CSV samples representing datasets, Your task is as follows:
-        1. Thoroughly analyze each CSV sample to understand its context and overall structure and how it relates to the user's query or conversation history (if given).
+        You are a data visualization expert. Given conversation context and a list of one or more CSV samples representing datasets, your task is as follows:
+        1. Thoroughly analyze each CSV sample (each CSV is assigned an index, starting from 0) to understand its context and overall structure and how it relates to the user's query or conversation history (if given).
         2. Identify all potential pairs of columns and the most appropriate chart type that can create meaningful visualizations.
         3. **Column Selection Criteria:**
-        - **Label Column (X-axis/Grouping):** 
-            * Typically categorical values (e.g., region, date, category)
-            * Must be distinct values that group/classify data
-            * Cannot contain duplicate values when used for grouping
-        - **Value Column (Y-axis/Measurement):** 
-            * Numerical values that represent measurements (e.g., sales, counts, percentages)
-            * Should be aggregatable metrics (sum, average, etc.)
-        - **Critical Rule:** Label and value columns MUST be different columns - never use the same column for both roles
-        
+           - **Label Column (X-axis/Grouping):** 
+             * Typically categorical values (e.g., region, date, category)
+             * Must be distinct values that group/classify data
+             * Cannot contain duplicate values when used for grouping
+           - **Value Column (Y-axis/Measurement):** 
+             * Numerical values that represent measurements (e.g., sales, counts, percentages)
+             * Should be aggregatable metrics (sum, average, etc.)
+           - **Critical Rule:** Label and value columns MUST be different columns - never use the same column for both roles
         4. Based on the user query, decide whether to generate (0-3) chart configurations:
-        - Generate 1 config for simple CSVs (<4 columns)
-        - Multiple configs only when showing different perspectives (when multiple CSVs or CSVs with many columns are available)
-        - No configs if CSV has 1 column only or the conversation and the provided CSVs are competely unrelated
-        
-        5. Provide concise, descriptive titles showing: 
-        - Measured value
-        - Grouping dimension
-        - Time period (if relevant)
+           - Generate 1 config for simple CSVs (<4 columns)
+           - Multiple configs only when showing different perspectives (when multiple CSVs or CSVs with many columns are available)
+           - No configs if CSV has 1 column only or the conversation and the provided CSVs are completely unrelated
+        5. For each chart configuration, include a new field called "csv_index" that indicates the index of the CSV sample (from the provided list) used to generate that configuration.
+        6. Provide concise, descriptive titles showing:
+           - Measured value
+           - Grouping dimension
+           - Time period (if relevant)
     """
 
     try:
-        csv_context = "\n\n---\n\n".join(csv_list)
+        csv_collection = CSVCollection(
+            csvs=[IndexedCSV(index=i, content=csv) for i, csv in enumerate(csv_list)]
+        )
+        csv_json = csv_collection.model_dump_json(indent=2)
         context_json = json.dumps(context, indent=2)
-        user_content = f"Context: {context_json}\n\nCSV Samples:\n{csv_context}"
+        user_content = f"Context: {context_json}\n\nCSV Samples:\n{csv_json}"
 
         response_content = generate_completion(system_prompt, user_content, ChartConfigList.model_json_schema())
 
-        return ChartConfigList.model_validate_json(response_content)
+        # Validate response against the model
+        raw_config = ChartConfigList.model_validate_json(response_content)
+        
+        # Second pass: Validate and collect used indices
+        used_indices: Set[int] = set()
+        valid_charts = []
+        
+        for chart in raw_config.charts:
+            if 0 <= chart.csv_index < len(csv_list):
+                used_indices.add(chart.csv_index)
+                valid_charts.append(chart)
+            else:
+                print(f"Skipping invalid chart with csv_index {chart.csv_index}")
+
+        # Build minimal CSV collection
+        minimal_csvs = [
+            IndexedCSV(index=i, content=csv_list[i])
+            for i in sorted(used_indices)  # Maintain original order
+        ]
+
+        return ChartConfigList(
+            charts=valid_charts,
+            csv_collection=CSVCollection(csvs=minimal_csvs)
+        )
 
     except Exception as e:
         print(f"Error getting chart config: {e}")

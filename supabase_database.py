@@ -374,24 +374,53 @@ async def get_conversation_messages(conversation_id, limit: Optional[int] = None
         print(f"Error retrieving conversation history: {e}")
         return None
     
-async def save_converation_message(conversation_id, role, text_content, json_content = None):
+async def save_conversation_messages(messages: list) -> list:
+    """
+    Save multiple conversation messages in a single database call.
+    """
     try:
-
-        if text_content is None:
-            raise ValueError("Text content must be provided.")
-
-        response = supabase.table("messages").insert({
-            "conversation_id": conversation_id,
-            "role": role,
-            "text_content": text_content,
-            "json_content": json_content
-        }).execute()
-    
+        if not messages:
+            raise ValueError("At least one message must be provided.")
+        
+        response = supabase.table("messages").insert(messages).execute()
         if not response.data:
             return []
         
         return response.data
 
     except Exception as e:
-        print(f"Error saving conversation message: {e}")
+        print(f"Error saving conversation messages: {e}")
         return []
+
+async def get_or_create_conversation_session_and_history(
+    user_id: str, conversation_id: str | None = None, history_limit: int = 4
+):
+    """
+    Retrieve the conversation session along with its messages (limited to history_limit).
+    If conversation_id is not provided or is invalid, create a new session.
+    """
+    try:
+        if conversation_id:
+            # Query to fetch the conversation along with its messages
+            response = (
+                supabase.table("conversations")
+                .select("id, summary, messages:messages(role, text_content, json_content, created_at)")
+                .eq("user_id", user_id)
+                .eq("id", conversation_id)
+                .execute()
+            )
+            # If a valid session is found, return it along with the limited history.
+            if response.data:
+                session = response.data[0]
+                messages = sorted(session.get("messages", []), key=lambda m: m["created_at"], reverse=True)
+                conversation_history = messages[:history_limit]
+                return session, conversation_history
+
+        # Either no session_id was provided or the provided session_id is invalid.
+        response = supabase.table("conversations").insert({"user_id": user_id}).execute()
+        session = response.data[0]
+        return session, []  # New session, so no history yet.
+
+    except Exception as e:
+        print(f"Error in get_or_create_conversation_session_and_history: {e}")
+        return None, None

@@ -66,15 +66,13 @@ async def validate_api_key(api_key: str = Depends(api_key_header)):
 # Models
 class QueryRequest(BaseModel):
     text: str
-    session_id: Optional[str] = None
-    preferences: Optional[dict] = None
 
 class QueryResponse(BaseModel):
+    session_id: str
     request_id: str
     text_response: str
     chart_configs: Optional[ChartConfigList] = None
     sources: List[str]
-    session_id: Optional[str] = None
     latency_ms: float
 
 class ReportRequest(BaseModel):
@@ -135,10 +133,11 @@ async def set_llm_api_key_endpoint(
         logger.error(f"Error updating LLM api key: {str(e)}")
         raise HTTPException(status_code=500, detail="Error updating LLM api key")
 
+@router.post("/query", response_model=QueryResponse)
 @router.post("/query/{session_id}", response_model=QueryResponse)
 async def process_query_endpoint(
-    session_id: str,
     request: QueryRequest, 
+    session_id: Optional[str] = None,
     auth: bool = Depends(validate_api_key)
 ):
     """Main query endpoint for RAG system"""
@@ -151,11 +150,11 @@ async def process_query_endpoint(
         print("Got handle_query result")
         
         return QueryResponse(
+            session_id= result["session_id"],
             request_id= result["request_id"],
             text_response= result["text_response"],
             chart_configs= result["chart_configs"],
             sources= [],  # Implement source tracking
-            session_id= request.session_id,
             latency_ms= (time.time() - start_time) * 1000
         )
         
@@ -242,11 +241,12 @@ async def generate_report_endpoint(
     auth: bool = Depends(validate_api_key)
 ):
     """Generate a professional report from RAG context"""
-    try:
-        context_data = redis_client.get(request_id)
-        if context_data is None:
-            return "No context data available for the given request ID."
-        
+
+    context_data = redis_client.get(request_id)
+    if context_data is None:
+        raise HTTPException(status_code=404, detail="No context data available for the given request ID.")
+
+    try:        
         # Decode and parse JSON directly
         context_data_dict = json.loads(context_data.decode("utf-8"))  
 
@@ -256,7 +256,7 @@ async def generate_report_endpoint(
     
     except Exception as e:
         logger.error(f"Report generation failed: {str(e)}")
-        raise HTTPException(status_code=500, detail="Report generation error")
+        raise HTTPException(status_code=500, detail=f"Report generation error: {str(e)}")
 
 PDF_UPLOAD_FOLDER = "pdfs"
 GENERATED_MARKDOWN_FOLDER = "markdowns"

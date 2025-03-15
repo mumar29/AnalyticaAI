@@ -1,12 +1,13 @@
 import json
 import uuid
+from fastapi import HTTPException
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, Optional, List
 from langchain_core.messages import HumanMessage, AIMessage
 from redis_config import get_redis_client
 
 from agent_functions import call_llm, classify_user_input, get_chart_configs, refine_query, select_relevant_documents, select_relevant_sql_tables
-from supabase_database import execute_sql_query, get_conversation_messages, get_conversation_session, get_database_schema, retrieve_all_documents, retrieve_chunks_tables, retrieve_relevant_chunks, save_converation_message
+from supabase_database import execute_sql_query, get_conversation_messages, get_conversation_session, get_database_schema, get_or_create_conversation_session_and_history, retrieve_all_documents, retrieve_chunks_tables, retrieve_relevant_chunks, save_conversation_messages
 from logging_config import logger
 from utils import list_dict_to_csv
 from websocket_manager import manager
@@ -256,16 +257,16 @@ workflow.add_edge("response_generator", END)
 app = workflow.compile()
 
 # RAG Usage
-async def handle_query(user_input: str, user_id: str, session_id: str):
+async def handle_query(user_input: str, user_id: str, session_id: str | None = None):
     request_id = str(uuid.uuid4())
 
-    session = await get_conversation_session(user_id, session_id)
-    if isinstance(session, dict):
-        session_id = session.get("id")
-    else:
-        session_id = session
-        
-    conversation_history = await get_conversation_messages(session_id, 4)
+    # This function handles both retrieving an existing session and creating one if needed.
+    session, conversation_history = await get_or_create_conversation_session_and_history(user_id, session_id, 6)
+    if session is None:
+        raise HTTPException(status_code=500, detail="Could not retrieve or create conversation session.")
+    
+    # Always use the valid session id from the returned session.
+    session_id = str(session["id"])
 
     initial_state = {
         "user_id": user_id,
@@ -273,8 +274,6 @@ async def handle_query(user_input: str, user_id: str, session_id: str):
         "user_input": user_input,
         "conversation_history": conversation_history
     }
-
-    await save_converation_message(session_id, "user", user_input)
 
     result = await app.ainvoke(initial_state)
 
@@ -284,8 +283,11 @@ async def handle_query(user_input: str, user_id: str, session_id: str):
     context_data = {
         "user_query": user_input,
         "context": {
-            "sql_results": result.get("sql_results", []),
-            "doc_results": {"chunks_text": result["doc_results"]["chunks_text"]} if result.get("doc_results") else {}
+            "conversation_history": conversation_history,
+            "retrieval_results": {
+                "sql_results": result.get("sql_results", []),
+                "doc_results": {"chunks_text": result["doc_results"]["chunks_text"]} if result.get("doc_results") else {}
+            }
         }
     }
     
@@ -294,12 +296,28 @@ async def handle_query(user_input: str, user_id: str, session_id: str):
     
     final_response_data = result["final_response"]  # Extract the dictionary
 
-    await save_converation_message(session_id, "AI", final_response_data["text_response"], final_response_data["chart_configs"].model_dump() if final_response_data["chart_configs"] else None)
+    messages = [
+        {
+            "conversation_id": session_id,
+            "role": "user",
+            "text_content": user_input,
+            "json_content": None
+        },
+        {
+            "conversation_id": session_id,
+            "role": "AI",
+            "text_content": final_response_data["text_response"],
+            "json_content": final_response_data["chart_configs"].model_dump() if final_response_data["chart_configs"] else None
+        }
+    ]
+
+    await save_conversation_messages(messages)
 
     final_response = {
+        "request_id": request_id,
+        "session_id": session_id,
         "text_response": final_response_data["text_response"],
-        "chart_configs": final_response_data["chart_configs"],
-        "request_id": request_id
+        "chart_configs": final_response_data["chart_configs"]
     }
 
     # Return only the final response and the request ID to the client

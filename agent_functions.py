@@ -379,4 +379,3 @@ def get_chart_configs(csv_list: List[str], context: dict) -> ChartConfigList:
             "error": "Failed to generate chart configuration.",
             "details": str(e)
         }
-

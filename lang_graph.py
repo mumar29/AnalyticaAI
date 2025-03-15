@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from fastapi import HTTPException
@@ -9,7 +10,7 @@ from redis_config import get_redis_client
 from agent_functions import call_llm, classify_user_input, get_chart_configs, refine_query, select_relevant_documents, select_relevant_sql_tables
 from supabase_database import execute_sql_query, get_conversation_messages, get_conversation_session, get_database_schema, get_or_create_conversation_session_and_history, retrieve_all_documents, retrieve_chunks_tables, retrieve_relevant_chunks, save_conversation_messages
 from logging_config import logger
-from utils import list_dict_to_csv
+from utils import list_dict_to_csv, update_conversation_summary_incremental
 from websocket_manager import manager
 
 redis_client = get_redis_client()
@@ -19,7 +20,8 @@ class AgentState(TypedDict):
     user_id: str
     session_id: str
     user_input: str
-    conversation_history: Optional[List[dict]] 
+    recent_messages: Optional[List[dict]]
+    conversation_summary: Optional[str]
     needs_rag: Optional[bool]
     data_source: Optional[str]
     sql_results: Optional[List[dict]]
@@ -35,8 +37,11 @@ async def route_query(state: AgentState):
     await manager.broadcast("Classifying your query") 
     
     context = {
-        "recent_messages": state["conversation_history"],
-        "current_query": state["user_input"]
+        "current_user_query": state["user_input"],
+        "context": {
+            "recent_messages": state["recent_messages"],
+            "conversation_summary": state["conversation_summary"]
+        }
     }
 
     classification = classify_user_input(context)
@@ -64,8 +69,11 @@ async def process_sql(state: AgentState):
         await manager.broadcast("Identifying relevant SQL tables and generating SQL queries") 
 
         context = {
-            "recent_messages": state["conversation_history"],
-            "current_query": state["user_input"]
+            "current_user_query": state["user_input"],
+            "context": {
+                "recent_messages": state["recent_messages"],
+                "conversation_summary": state["conversation_summary"]
+            }
         }
 
         tables = select_relevant_sql_tables(schema, context)
@@ -98,8 +106,11 @@ async def process_docs(state: AgentState):
         await manager.broadcast("Identifying relevant PDF documents and their sections") 
 
         context = {
-            "recent_messages": state["conversation_history"],
-            "current_query": state["user_input"]
+            "current_user_query": state["user_input"],
+            "context": {
+                "recent_messages": state["recent_messages"],
+                "conversation_summary": state["conversation_summary"]
+            }
         }
 
         selected = select_relevant_documents(docs, context)
@@ -147,10 +158,12 @@ async def generate_response(state: AgentState):
     # conversation_history = conversation_history if conversation_history else None
 
     # Build Conversation context
+    
     context_data = {
-        "user_query": state["user_input"],
+        "current_user_query": state["user_input"],
         "context": {
-            "conversation_history": state["conversation_history"]
+            "recent_messages": state["recent_messages"],
+            "conversation_summary": state["conversation_summary"]
         }
     }
 
@@ -199,13 +212,8 @@ async def generate_response(state: AgentState):
 
     await manager.broadcast("Generating visualizations") 
 
-    context = {
-        "recent_messages": state["conversation_history"],
-        "current_query": state["user_input"]
-    }
-
     # Call get_chart_configs with the collected CSV list and the user query.
-    chart_configs = get_chart_configs(all_csv_list, context) if all_csv_list else None
+    chart_configs = get_chart_configs(all_csv_list, context_data) if all_csv_list else None
 
     logger.debug("Chart configurations: %s", chart_configs)
 
@@ -261,18 +269,21 @@ async def handle_query(user_input: str, user_id: str, session_id: str | None = N
     request_id = str(uuid.uuid4())
 
     # This function handles both retrieving an existing session and creating one if needed.
-    session, conversation_history = await get_or_create_conversation_session_and_history(user_id, session_id, 6)
+    session, conversation_history = await get_or_create_conversation_session_and_history(user_id, session_id, 8)
     if session is None:
         raise HTTPException(status_code=500, detail="Could not retrieve or create conversation session.")
     
     # Always use the valid session id from the returned session.
     session_id = str(session["id"])
 
+    conversation_summary = session.get("summary", "")
+
     initial_state = {
         "user_id": user_id,
         "session_id": session_id,
         "user_input": user_input,
-        "conversation_history": conversation_history
+        "conversation_summary": conversation_summary,
+        "recent_messages": conversation_history,
     }
 
     result = await app.ainvoke(initial_state)
@@ -283,7 +294,8 @@ async def handle_query(user_input: str, user_id: str, session_id: str | None = N
     context_data = {
         "user_query": user_input,
         "context": {
-            "conversation_history": conversation_history,
+            "conversation_summary": conversation_summary,
+            "recent_messages": conversation_history,
             "retrieval_results": {
                 "sql_results": result.get("sql_results", []),
                 "doc_results": {"chunks_text": result["doc_results"]["chunks_text"]} if result.get("doc_results") else {}
@@ -299,7 +311,7 @@ async def handle_query(user_input: str, user_id: str, session_id: str | None = N
     messages = [
         {
             "conversation_id": session_id,
-            "role": "user",
+            "role": "USER",
             "text_content": user_input,
             "json_content": None
         },
@@ -312,6 +324,8 @@ async def handle_query(user_input: str, user_id: str, session_id: str | None = N
     ]
 
     await save_conversation_messages(messages)
+
+    asyncio.create_task(update_conversation_summary_incremental(user_id, session_id))
 
     final_response = {
         "request_id": request_id,

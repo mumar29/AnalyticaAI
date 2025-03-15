@@ -271,9 +271,9 @@ async def retrieve_chunks_tables(chunk_ids: List[int]) -> List[str]:
 
         # Query Supabase for chunk tables
         result = supabase.from_('md_tables') \
-                    .select('csv_data') \
-                    .in_("chunk_id", chunk_ids) \
-                    .execute()
+            .select('csv_data') \
+            .in_("chunk_id", chunk_ids) \
+            .execute()
         
         if not result.data:
             return []
@@ -318,19 +318,46 @@ async def get_conversation_session(user_id, conversation_id):
         print(f"Error retrieving conversation summary: {e}")
         return None
 
-async def update_conversation_summary(user_id, conversation_id, summary):
+async def update_conversation_summary(user_id: str, conversation_id: str, updated_summary: str, last_summarized_index):
     """Update the summary of a conversation for a given user."""
     try:   
         # If no existing conversation, create a new one
-        response = supabase.table("conversations").update(
-            {"summary": summary}
-        ).eq("user_id", user_id).eq("id", conversation_id).execute()  
+        response = supabase.table("conversations") \
+            .update({
+                "summary": updated_summary,
+                "last_summarized_message_count": last_summarized_index
+            }) \
+            .eq("user_id", user_id) \
+            .eq("id", conversation_id) \
+            .execute()  
 
-        return response.data[0]["id"]
+        if not response.data:
+            return None
+
+        return response.data
 
     except Exception as e:
         print(f"Error updating conversation summary: {e}")
         return None 
+
+async def get_conversation_summary(user_id: str, conversation_id: str) -> List[dict] | None:
+    try:
+        response = supabase.table("conversations") \
+            .select("summary, total_messages, last_summarized_message_count") \
+            .eq("user_id", user_id) \
+            .eq("id", conversation_id) \
+            .order("created_at", desc=True) \
+            .maybe_single() \
+            .execute()
+
+        if not response.data:
+            return None
+
+        return response.data
+
+    except Exception as e:
+        print(f"Error retrieving conversation summary: {e}")
+        return None
 
 async def get_user_conversations(user_id: str) -> List[dict] | None:
     try:
@@ -393,34 +420,51 @@ async def save_conversation_messages(messages: list) -> list:
         return []
 
 async def get_or_create_conversation_session_and_history(
-    user_id: str, conversation_id: str | None = None, history_limit: int = 4
+    user_id: str, conversation_id: str | None = None, history_limit: int = 8
 ):
     """
-    Retrieve the conversation session along with its messages (limited to history_limit).
-    If conversation_id is not provided or is invalid, create a new session.
+    Retrieves a conversation session with the last `history_limit` messages.
+    If no valid conversation_id is provided, creates a new conversation.
     """
+    # Call the custom SQL function via supabase.rpc.
+    response = supabase.rpc(
+        "get_or_create_conversation_session_and_history",
+        {
+            "p_user_id": user_id,
+            "p_conversation_id": conversation_id,  # Pass None for new conversations.
+            "p_history_limit": history_limit
+        }
+    ).execute()
+    
+    if response.data and len(response.data) > 0:
+        row = response.data[0]
+        session = {
+            "id": row["conversation_id"],
+            "summary": row["summary"]
+        }
+        conversation_history = row["messages"]
+        return session, conversation_history
+    else:
+        return None, None
+    
+async def get_unsummarized_messages(conversation_id: str, last_index: int):
     try:
-        if conversation_id:
-            # Query to fetch the conversation along with its messages
-            response = (
-                supabase.table("conversations")
-                .select("id, summary, messages:messages(role, text_content, json_content, created_at)")
-                .eq("user_id", user_id)
-                .eq("id", conversation_id)
-                .execute()
-            )
-            # If a valid session is found, return it along with the limited history.
-            if response.data:
-                session = response.data[0]
-                messages = sorted(session.get("messages", []), key=lambda m: m["created_at"], reverse=True)
-                conversation_history = messages[:history_limit]
-                return session, conversation_history
+        response = supabase.table("messages") \
+            .select("role, text_content, created_at") \
+            .eq("conversation_id", conversation_id) \
+            .order("created_at") \
+            .range(last_index, last_index + 100000) \
+            .execute()
 
-        # Either no session_id was provided or the provided session_id is invalid.
-        response = supabase.table("conversations").insert({"user_id": user_id}).execute()
-        session = response.data[0]
-        return session, []  # New session, so no history yet.
+        if not response.data:
+            return None
+
+        print("============================================================================================")
+        print(response.data)
+        print("============================================================================================")
+
+        return response.data
 
     except Exception as e:
-        print(f"Error in get_or_create_conversation_session_and_history: {e}")
-        return None, None
+        print(f"Error retrieving unsummarized messages: {e}")
+        return None

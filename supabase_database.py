@@ -459,10 +459,6 @@ async def get_unsummarized_messages(conversation_id: str, last_index: int):
         if not response.data:
             return None
 
-        print("============================================================================================")
-        print(response.data)
-        print("============================================================================================")
-
         return response.data
 
     except Exception as e:

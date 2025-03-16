@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from llm_provider import generate_completion
 
 class IndexedCSV(BaseModel):
-    index: int
+    csv_index: int
     content: str
 
 class CSVCollection(BaseModel):
@@ -182,8 +182,11 @@ def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> Tab
     system_prompt = f"""
         You are an expert SQL assistant with two tasks:
         1. Select tables relevant to answering the user query based on their columns.
-        2. Generate one or more SQL queries using ONLY those tables that could satisfy the request and reflect the user's intent.
-
+        2. Generate one or more SQL queries using ONLY those tables that:
+            - Directly satisfy the main data request from the user.
+            - Retrieve additional supporting data that offers context or deeper insights.
+            - Include supplementary queries that provide complementary details—such as aggregated views, breakdowns, or detailed listings—when they add analytical value.
+        
         Database schema structure:
         - JSON object with tables containing columns (name->type) and view_access.
         - Column types may have '!' indicating required (ignore this for querying).
@@ -200,7 +203,10 @@ def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> Tab
             - Includes required clauses (WHERE, JOINs, etc.).
             - Matches the query intent precisely.
             - Handles potential NULLs if needed.
-        """
+        6. **For additional context:** 
+            - In addition to the main query, generate extra query(s) that retrieve related data that can be used for further insights.
+    """
+
     
     try:
         context_json = json.dumps(context, indent=2)
@@ -208,6 +214,10 @@ def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> Tab
         user_content = f"context: {context_json}\n\nsql_schema:\n{schema_json}"
 
         response_content = generate_completion(system_prompt, user_content, TablesRetrieved.model_json_schema())
+
+        print("============================================================================================")
+        print(response_content)
+        print("============================================================================================")
         
         return TablesRetrieved.model_validate_json(response_content)
         
@@ -314,33 +324,74 @@ def generate_structured_report(context_data: Dict[str, Any]) -> Report:
 
 def get_chart_configs(csv_list: List[str], context: dict) -> ChartConfigList:
     
+    # system_prompt = f"""
+    #     You are a data visualization expert. Given conversation context and a list of one or more CSV samples representing datasets, your task is as follows:
+    #     1. Thoroughly analyze each CSV sample (each CSV is assigned an index, starting from 0) to understand its context and overall structure and how it relates to the user's query or conversation history (if given).
+    #     2. Identify all potential pairs of columns and the most appropriate chart type that can create meaningful visualizations.
+    #     3. **Column Selection Criteria:**
+    #        - **Label Column (X-axis/Grouping):** 
+    #          * Typically categorical values (e.g., region, date, category)
+    #          * Must be distinct values that group/classify data
+    #          * Cannot contain duplicate values when used for grouping
+    #        - **Value Column (Y-axis/Measurement):** 
+    #          * Numerical values that represent measurements (e.g., sales, counts, percentages)
+    #          * Should be aggregatable metrics (sum, average, etc.)
+    #        - **Critical Rule:** Label and value columns MUST be different columns - never use the same column for both roles
+    #     4. Based on the user query, decide whether to generate (0-3) chart configurations:
+    #        - Generate 1 config for simple CSVs (<4 columns)
+    #        - Multiple configs only when showing different perspectives (when multiple CSVs or CSVs with many columns are available)
+    #        - No configs if CSV has 1 column only or the conversation and the provided CSVs are completely unrelated
+    #     5. For each chart configuration, include a new field called "csv_index" that indicates the index of the CSV sample (from the provided list) used to generate that configuration.
+    #     6. Provide concise, descriptive titles showing:
+    #        - Measured value
+    #        - Grouping dimension
+    #        - Time period (if relevant)
+    # """
+
     system_prompt = f"""
-        You are a data visualization expert. Given conversation context and a list of one or more CSV samples representing datasets, your task is as follows:
-        1. Thoroughly analyze each CSV sample (each CSV is assigned an index, starting from 0) to understand its context and overall structure and how it relates to the user's query or conversation history (if given).
-        2. Identify all potential pairs of columns and the most appropriate chart type that can create meaningful visualizations.
-        3. **Column Selection Criteria:**
-           - **Label Column (X-axis/Grouping):** 
-             * Typically categorical values (e.g., region, date, category)
-             * Must be distinct values that group/classify data
-             * Cannot contain duplicate values when used for grouping
-           - **Value Column (Y-axis/Measurement):** 
-             * Numerical values that represent measurements (e.g., sales, counts, percentages)
-             * Should be aggregatable metrics (sum, average, etc.)
-           - **Critical Rule:** Label and value columns MUST be different columns - never use the same column for both roles
-        4. Based on the user query, decide whether to generate (0-3) chart configurations:
-           - Generate 1 config for simple CSVs (<4 columns)
-           - Multiple configs only when showing different perspectives (when multiple CSVs or CSVs with many columns are available)
-           - No configs if CSV has 1 column only or the conversation and the provided CSVs are completely unrelated
-        5. For each chart configuration, include a new field called "csv_index" that indicates the index of the CSV sample (from the provided list) used to generate that configuration.
-        6. Provide concise, descriptive titles showing:
-           - Measured value
-           - Grouping dimension
-           - Time period (if relevant)
+    You are a data visualization expert. Given conversation context and a list of one or more CSV samples (each assigned an index) representing datasets, your task is to generate VALID chart configurations by following these STRICT RULES:
+
+    1. CSV VALIDATION:
+        - Reject CSVs with: 
+            • Only 1 column
+            • Only 1 data row
+        - Process CSVs with:
+            • At least 1 categorical column (text/dates) 
+            • At least 1 other column (numerical or categorical)
+
+    2. COLUMN RULES (MUST FOLLOW):
+        ■ Label column (X-axis): 
+            - Categorical/text data (e.g., "Month", "Category")
+            - Unique values (no duplicates)
+        ■ Value column (Y-axis):
+            - Numerical data (e.g., "Sales", "Quantity") OR
+            - Categorical data for counts/frequencies (e.g., "Category" → count occurrences)
+            - MUST be different from label column
+
+    3. CHART CREATION:
+        • Total charts MUST be 0-3 across ALL CSVs
+        • For EACH valid and relevant CSV:
+            - Create 1-2 configurations for Simple CSVs (2-4 columns)
+            - Create 1-3 configurations for Complex  CSVs (4+ columns) only if they show unique perspectives
+            - Choose chart type based on data:
+                → Trends: line/bar
+                → Comparisons: bar/pie
+                → Distributions: histogram (for numerical data)
+                → Frequencies: bar/pie (for categorical counts)
+        • Skip CSVs that don't match user request context
+
+    4. STRICT PROHIBITIONS:
+    ❌ Never use same column for label and value
+    ❌ Never use same label/value pair in multiple charts
+    ❌ No charts for single-column CSVs
+    ❌ No imaginary columns - use only what exists
+
+    5. Provide concise, descriptive Titles for each chart configuarion
     """
 
     try:
         csv_collection = CSVCollection(
-            csvs=[IndexedCSV(index=i, content=csv) for i, csv in enumerate(csv_list)]
+            csvs=[IndexedCSV(csv_index=i, content=csv) for i, csv in enumerate(csv_list)]
         )
         csv_json = csv_collection.model_dump_json(indent=2)
         context_json = json.dumps(context, indent=2)
@@ -364,7 +415,7 @@ def get_chart_configs(csv_list: List[str], context: dict) -> ChartConfigList:
 
         # Build minimal CSV collection
         minimal_csvs = [
-            IndexedCSV(index=i, content=csv_list[i])
+            IndexedCSV(csv_index=i, content=csv_list[i])
             for i in sorted(used_indices)  # Maintain original order
         ]
 

@@ -10,7 +10,7 @@ from redis_config import get_redis_client
 from agent_functions import call_llm, classify_user_input, get_chart_configs, refine_query, select_relevant_documents, select_relevant_sql_tables
 from supabase_database import execute_sql_query, get_conversation_messages, get_conversation_session, get_database_schema, get_or_create_conversation_session_and_history, retrieve_all_documents, retrieve_chunks_tables, retrieve_relevant_chunks, save_conversation_messages
 from logging_config import logger
-from utils import list_dict_to_csv, update_conversation_summary_incremental
+from utils import execute_query, json_default, list_dict_to_csv, update_conversation_summary_incremental
 from websocket_manager import manager
 
 redis_client = get_redis_client()
@@ -18,6 +18,7 @@ redis_client = get_redis_client()
 # Define state schema
 class AgentState(TypedDict):
     user_id: str
+    org_id: str
     session_id: str
     user_input: str
     recent_messages: Optional[List[dict]]
@@ -64,7 +65,7 @@ workflow.add_node("router", route_query)
 async def process_sql(state: AgentState):
     if state["data_source"] in ["both", "sql"]:
         logger.info("Processing SQL query for: %s", state["user_input"])
-        schema = await get_database_schema()
+        schema = await get_database_schema(state["org_id"])
 
         await manager.broadcast("Identifying relevant SQL tables and generating SQL queries") 
 
@@ -83,7 +84,7 @@ async def process_sql(state: AgentState):
         for query in tables.sql_queries:
             try:
                 logger.debug("Executing SQL query: %s", query)
-                result = execute_sql_query(query)
+                result = execute_query(state["org_id"], query)
                 csv_result = list_dict_to_csv(result)
                 logger.debug("SQL query result: %s", csv_result)
                 results.append({"query": query, "data": csv_result})
@@ -100,7 +101,7 @@ workflow.add_node("sql_processor", process_sql)
 async def process_docs(state: AgentState):
     if state["data_source"] in ["both", "docs"]:
         logger.info("Processing document retrieval for: %s", state["user_input"])
-        docs = await retrieve_all_documents()
+        docs = await retrieve_all_documents(state["org_id"])
         logger.debug("Documents retrieved: %s", docs)
         
         await manager.broadcast("Identifying relevant PDF documents and their sections") 
@@ -187,7 +188,7 @@ async def generate_response(state: AgentState):
         "doc_results": {"chunks_text": state["doc_results"]["chunks_text"]} if state.get("doc_results") else {}
     }
 
-    user_content = json.dumps(context_data, indent=2)
+    user_content = json.dumps(context_data, default=json_default, indent=2)
     logger.debug("Context for RAG: %s", user_content)
     
     rag_result = call_llm(
@@ -265,7 +266,7 @@ workflow.add_edge("response_generator", END)
 app = workflow.compile()
 
 # RAG Usage
-async def handle_query(user_input: str, user_id: str, session_id: str | None = None):
+async def handle_query(user_input: str, user_id: int, org_id: str, session_id: str | None = None):
     request_id = str(uuid.uuid4())
 
     # This function handles both retrieving an existing session and creating one if needed.
@@ -280,6 +281,7 @@ async def handle_query(user_input: str, user_id: str, session_id: str | None = N
 
     initial_state = {
         "user_id": user_id,
+        "org_id": org_id,
         "session_id": session_id,
         "user_input": user_input,
         "conversation_summary": conversation_summary,

@@ -1,9 +1,7 @@
-
-from dataclasses import dataclass
 import json
 import os
 from typing import List
-
+from dataclasses import dataclass
 from pydantic import BaseModel
 from pydantic_ai import Agent, RunContext
 from supabase import Client, create_client

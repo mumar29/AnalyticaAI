@@ -1,13 +1,6 @@
-from typing import Any, Dict, List, Literal, Optional, Set
-import os
 import json
-import uvicorn
-
-from pydantic import BaseModel, Extra
-from groq import Groq
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-
+from typing import Any, Dict, List, Literal, Optional, Set
+from pydantic import BaseModel, model_validator
 from llm_provider import generate_completion
 
 class IndexedCSV(BaseModel):
@@ -76,6 +69,26 @@ class PerformanceReport(BaseModel):
 
 class Report(BaseModel):
     html: str
+
+class Instruction(BaseModel):
+    id: int
+    selectedText: str
+    instruction: str
+
+class UpdateReportRequest(BaseModel):
+    originalHtml: str
+    generalInstruction: Optional[str] = None
+    specificInstructions: Optional[List[Instruction]] = None
+
+    @model_validator(mode="after")
+    def check_constraints(self):
+        if not self.generalInstruction and not self.specificInstructions:
+            raise ValueError("Either 'generalInstruction' must be provided or 'specificInstructions' must contain at least one item.")
+        if self.generalInstruction is None and not self.specificInstructions:
+            raise ValueError("If 'generalInstruction' is None, 'specificInstructions' must not be empty.")
+        if self.specificInstructions is None and not self.generalInstruction:
+            raise ValueError("If 'specificInstructions' is None, 'generalInstruction' must not be empty.")
+        return self
 
 def call_llm(system_prompt: str, user_content: str) -> LLMResponse:
     try:
@@ -262,8 +275,6 @@ def generate_kpi_sql_queries(sql_schema: Dict[str, Any]) -> KPIQueriesRetrieved:
             "details": str(e)
         }
 
-
-
 def generate_performance_report(sql_results: List[Dict[str, Any]]) -> PerformanceReport:
     system_prompt = f"""
         You are a professional data analyst and business consultant. Your task is to analyze the provided results of SQL queries that extract key performance indicators (KPIs) related to a company's performance and health. The input is a JSON array where each element contains a SQL query and its result. 
@@ -319,6 +330,34 @@ def generate_structured_report(context_data: Dict[str, Any]) -> Report:
         print(f"Error generating report: {e}")
         return {
             "error": "Failed to generate report.",
+            "details": str(e)
+        }
+
+def update_strutured_report(instructions_data: UpdateReportRequest) -> Report:
+    system_prompt = f"""You are an HTML Report Updater that produces updated, complete, professional business reports in HTML format.
+    Your task is to generate an updated version of an existing report by applying the modifications and instructions provided by the user. The updated report should reflect all requested changes while preserving the original report's structure and professional styling.
+
+    Please ensure that:
+    1. The output is a complete, valid HTML document, including <html>, <head>, and <body> tags.
+    2. All modifications specified in the instructions are accurately incorporated into the report. This includes updates to content, styling, and layout.
+    3. The report maintains a professional tone and structure, using appropriate headings (e.g., <h1>, <h2>), paragraphs (<p>), and lists (ordered or unordered) as needed.
+    4. The updated report uses inline CSS or internal <style> tags to ensure a polished and visually appealing design.
+    5. The core structure and branding of the original report are preserved, while integrating the new content seamlessly.
+    6. If additional insights or contextual details are provided, incorporate them where they add value to the updated report.
+    """
+
+    try:
+        schema_dict  = instructions_data.model_dump()
+        schema_json = json.dumps(schema_dict , indent=2)
+
+        response_content = generate_completion(system_prompt, schema_json, Report.model_json_schema())
+        
+        return Report.model_validate_json(response_content)
+        
+    except Exception as e:
+        print(f"Error updating report: {e}")
+        return {
+            "error": "Failed to update report.",
             "details": str(e)
         }
 

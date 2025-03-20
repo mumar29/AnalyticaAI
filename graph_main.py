@@ -10,15 +10,21 @@ import uvicorn
 from typing import Dict, List, Optional
 from fastapi import FastAPI, APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from llama_parse import LlamaParse
 from llama_index.core import SimpleDirectoryReader
-from agent_functions import ChartConfigList, PerformanceReport, Report, generate_kpi_sql_queries, generate_performance_report, generate_structured_report
+from agent_functions import ChartConfigList, PerformanceReport, Report, UpdateReportRequest, generate_kpi_sql_queries, generate_performance_report, generate_structured_report, update_strutured_report
+from auth import User, create_access_token, get_current_user, get_password_hash, verify_password
 from chunk_md import process_document
 from crawler import crawl_website
+from database_provider import DatabaseProvider
 from lang_graph import handle_query
+from llm_provider import LLMConnection, LLMProvider
 from logging_config import logger
-from supabase_database import set_llm_api_key, execute_sql_query, fetch_llm_api_key, get_conversation_messages, get_database_schema, get_user_conversations
+from models import DatabaseConnection
+from supabase_database import create_user, fetch_sql_db_credentials, get_user, register_organization, set_llm_api_key, fetch_llm_api_key, get_conversation_messages, get_database_schema, get_user_conversations, set_sql_db_credentials
+from supabase_provider import SupabaseProvider
+from utils import execute_query, json_default, save_credentials_to_env
 from websocket_manager import manager
 from redis_config import get_redis_client
 from dotenv import load_dotenv
@@ -27,23 +33,30 @@ load_dotenv()
 
 redis_client = get_redis_client()
 
+async def ensure_db_initialized(current_user: User = Depends(get_current_user)):
+    try:
+        # This call will only fetch the configuration if no connection exists yet.
+        DatabaseProvider.get_or_initialize(current_user.organization_id)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to initialize database connection for org {current_user.organization_id}: {str(e)}"
+        )
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event to fetch API key once on startup."""
+    # request = fetch_sql_db_credentials()
+    # if request:
+    #     request_data = DatabaseConnection(**request)
+    #     DatabaseProvider.initialize(request_data)
+
     credentials = fetch_llm_api_key()  # Fetch and store the API key on startup
+    print("Fetched credentials:", credentials)  # Debugging line
+
     if credentials:
-
-        provider = credentials["provider"]
-        api_key = credentials["api_key"]
-
-        if provider == "GROQ":
-            os.environ["GROQ_API_KEY"] = api_key
-            print("GROQ API key set successfully.")
-        elif provider == "GEMINI":
-            os.environ["GEMINI_API_KEY"] = api_key
-            print("GEMINI API key set successfully.")
-        else:
-            print(f"Unsupported provider: {provider}")
+        request_data = LLMConnection(provider=credentials["provider"], api_key=credentials["api_key"])
+        LLMProvider.initialize(request_data)
     yield  # Let FastAPI run
 
 app = FastAPI(
@@ -94,6 +107,28 @@ class LLMKeyRequest(BaseModel):
     provider: str
     key: str
 
+class DatabaseSetup(BaseModel):
+    url: str
+    key: str
+
+class OrganizationCreate(BaseModel):
+    name: str
+    admin_email: str
+    admin_password: str
+
+class UserCreate(BaseModel):
+    email: str
+    password: str
+    role: str = "member"
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+
 # Middleware
 @app.middleware("http")
 async def log_requests(request, call_next):
@@ -118,14 +153,114 @@ async def websocket_endpoint(websocket: WebSocket):
 # Endpoints
 router = APIRouter(dependencies=[Depends(validate_api_key)])
 
+@router.post("/register")
+async def register_organization_endpoint(org_data: OrganizationCreate):
+    """Create new organization with admin user"""
+
+    hashed_pw = get_password_hash(org_data.admin_password)
+
+    org_id = await register_organization(
+        org_data.name,
+        org_data.admin_email,
+        hashed_pw
+    )
+    return {"organization_id": org_id}
+
+@router.post("/login", response_model=TokenResponse)
+async def login_endpoint(login_data: LoginRequest):
+    # Get user from database
+    user = await get_user(login_data.email)
+    
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+    # Verify password
+    if not verify_password(login_data.password, user["hashed_password"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Create token
+    access_token = create_access_token(User(
+        id=user["id"],
+        organization_id=user["organization_id"],
+        role=user["role"]
+    ))
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
+
+@router.post("/create-user")
+async def create_user_endpoint(
+    user_data: UserCreate,
+    current_user: User = Depends(get_current_user)
+):
+    """Admin creates new organization member"""
+    if current_user.role != "admin":
+        raise HTTPException(403, "Admin privileges required")
+    
+    hashed_pw = get_password_hash(user_data.password)
+    user = await create_user(current_user.organization_id, user_data.email, hashed_pw, user_data.role)
+    
+    return {"user_id": user[0]["id"]}
+
+@router.post("/set-sql-database")
+async def set_sql_database(
+    request: DatabaseConnection,
+    current_user: User = Depends(get_current_user),
+):
+    """Update database credentials using dynamic request parameters"""
+    try:
+        # Initialize database provider with validated request data
+        response = await set_sql_db_credentials(current_user.organization_id, request)
+
+        if response.get("success"):  # Ensure we check for a successful response
+            DatabaseProvider.get_or_initialize(current_user.organization_id)
+
+        return {
+            "status": "success",
+            "message": f"Connected to {request.database_type} database",
+            "data": response
+        }
+    
+    except ValidationError as e:
+        return {"status": "error", "message": f"Validation error: {str(e)}"}
+    
+    except ConnectionError as e:
+        return {"status": "error", "message": f"Connection failed: {str(e)}"}
+    
+    except Exception as e:
+        return {"status": "error", "message": f"Unexpected error: {str(e)}"}
+
+@router.post("/setup-main-database")
+def setup_main_database(
+    request: DatabaseSetup
+):
+    """Update database credentials and execute SQL setup file."""
+    # Save credentials to .env
+    save_credentials_to_env(request.url, request.key)
+
+    os.environ["SUPABASE_URL"] = request.url
+    os.environ["SUPABASE_KEY"] = request.key
+
+    # Reset and reinitialize Supabase client
+    SupabaseProvider.reset_client()
+
+    return {
+        "status": "success",
+        "message": f"Updated main database",
+    }
+
 @router.post("/set-llm-api-key")
 async def set_llm_api_key_endpoint(
-    request: LLMKeyRequest,
+    request: LLMConnection,
     auth: bool = Depends(validate_api_key)
 ):
     """Update LLM api key"""
     try:
-        response = await set_llm_api_key(request.provider, request.key)
+        LLMProvider.initialize(request)
+
+        response = await set_llm_api_key(request)
         
         return response
 
@@ -136,16 +271,17 @@ async def set_llm_api_key_endpoint(
 @router.post("/query", response_model=QueryResponse)
 @router.post("/query/{session_id}", response_model=QueryResponse)
 async def process_query_endpoint(
-    request: QueryRequest, 
-    session_id: Optional[str] = None,
-    auth: bool = Depends(validate_api_key)
+    request: QueryRequest,
+    current_user: User = Depends(get_current_user),
+    _: None = Depends(ensure_db_initialized),
+    session_id: Optional[str] = None
 ):
     """Main query endpoint for RAG system"""
     try:
         start_time = time.time()
         
         # Execute workflow
-        result = await handle_query(request.text, "u_1", session_id)
+        result = await handle_query(request.text, current_user.id, current_user.organization_id, session_id)
 
         print("Got handle_query result")
         
@@ -157,15 +293,17 @@ async def process_query_endpoint(
             sources= [],  # Implement source tracking
             latency_ms= (time.time() - start_time) * 1000
         )
-        
+
+    except HTTPException as http_exc:
+        raise http_exc  
+
     except Exception as e:
         logger.error(f"Query failed: {str(e)}")
-        raise HTTPException(status_code=500, detail="Processing error")
+        raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
 
 @router.get("/get-conversations/{user_id}")
 async def get_user_conversations_endpoint(
-    user_id: str,
-    auth: bool = Depends(validate_api_key)
+    user_id: str
 ):
     """Retrieve all conversations for a user"""
     try:
@@ -180,8 +318,7 @@ async def get_user_conversations_endpoint(
 
 @router.get("/conversation-messages/{session_id}")
 async def get_conversation_endpoint(
-    session_id: str,
-    auth: bool = Depends(validate_api_key)
+    session_id: str
 ):
     """Retrieve conversation history for a session"""
     try:
@@ -198,7 +335,8 @@ async def get_conversation_endpoint(
 
 @router.get("/get-company-health", response_model=PerformanceReport)
 async def get_company_health_endpoint(
-    auth: bool = Depends(validate_api_key)
+    current_user: User = Depends(get_current_user),
+    _: None = Depends(ensure_db_initialized),
 ):
     """
     Retrieves the SQL schema using get_database_schema,
@@ -206,7 +344,7 @@ async def get_company_health_endpoint(
     """
     try:
         # Retrieve the schema from your database
-        schema = await get_database_schema()
+        schema = await get_database_schema(current_user.organization_id)
         # If the returned schema has a "tables" key, use that; otherwise, assume it's a flat dict.
         tables = schema.get("tables", schema)
         
@@ -217,7 +355,7 @@ async def get_company_health_endpoint(
         for query in kpi_queries.sql_queries:
             try:
                 logger.debug("Executing SQL query: %s", query)
-                result = execute_sql_query(query)
+                result = execute_query(current_user.organization_id, query)
                 logger.debug("SQL query result: %s", result)
                 results.append({"query": query, "data": result})
             except Exception as e:
@@ -225,7 +363,7 @@ async def get_company_health_endpoint(
                 results.append({"query": query, "error": str(e)})
         
         context = []
-        context.append("SQL Results:\n" + json.dumps(results, indent=2))
+        context.append("SQL Results:\n" + json.dumps(results, default=json_default, indent=2))
 
         report = generate_performance_report(context)
 
@@ -237,8 +375,7 @@ async def get_company_health_endpoint(
 
 @router.get("/generate-report/{request_id}", response_model=Report)
 async def generate_report_endpoint(
-    request_id: str, 
-    auth: bool = Depends(validate_api_key)
+    request_id: str
 ):
     """Generate a professional report from RAG context"""
 
@@ -258,6 +395,22 @@ async def generate_report_endpoint(
         logger.error(f"Report generation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Report generation error: {str(e)}")
 
+@router.post("/update_strutured_report", response_model=Report)
+async def update_strutured_report_endpoint(
+    instructions_data: UpdateReportRequest
+):
+    try:
+
+        report = update_strutured_report(instructions_data)  
+        return report
+        
+    except Exception as e:
+        print(f"Error updating report: {e}")
+        return {
+            "error": "Failed to update report.",
+            "details": str(e)
+        }
+
 PDF_UPLOAD_FOLDER = "pdfs"
 GENERATED_MARKDOWN_FOLDER = "markdowns"
 
@@ -268,7 +421,7 @@ os.makedirs(GENERATED_MARKDOWN_FOLDER, exist_ok=True)
 async def process_pdf_endpoint(
     pdf: UploadFile = File(...),
     premium_mode: bool = Form(False),
-    auth: bool = Depends(validate_api_key)
+    current_user: User = Depends(get_current_user)
 ):
     """API endpoint to upload and process a PDF file."""
     
@@ -298,7 +451,7 @@ async def process_pdf_endpoint(
         async with aiofiles.open(markdown_path, "w", encoding="utf-8") as md_file:
             await md_file.write(markdown_content)
 
-        await process_document(markdown_content, file_path, "pdf")
+        await process_document(markdown_content, file_path, "pdf", current_user.organization_id)
 
         return {"filename": pdf.filename, "status": "Processed successfully"}
 
@@ -308,7 +461,7 @@ async def process_pdf_endpoint(
 @router.post("/process-website")
 async def process_website_endpoint(
     request: UrlsRequest,
-    auth: bool = Depends(validate_api_key)
+    current_user: User = Depends(get_current_user)
 ):
     try:
         if not request.urls:
@@ -325,7 +478,7 @@ async def process_website_endpoint(
         main_url = urlparse(urls[0]).netloc
         
         # Process the collected markdowns as a batch
-        await process_document(list(markdowns), main_url, "webpage")
+        await process_document(list(markdowns), main_url, "webpage", current_user.organization_id)
         
         return {
             "message": "Crawling and processing completed",

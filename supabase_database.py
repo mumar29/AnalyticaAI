@@ -1,70 +1,110 @@
 #supabase_database.py
-import os
-import json
 from typing import Any, Dict, List, Optional, Tuple
+import psycopg2
 from pydantic import BaseModel
-from supabase import create_client, Client
-
 from LLM_analysis import get_embedding
 from agent_functions import Document
-from models import ProcessedChunk
+from llm_provider import LLMConnection
+from models import DatabaseConnection, ProcessedChunk
+from supabase_provider import SupabaseProvider
+from utils import execute_query
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+ALLOWED_LLM_PROVIDERS = {"GROQ", "GEMINI"}
+ALLOWED_DB_PROVIDERS = {"postgresql", "mysql", "sqlserver", "supabase"}
 
-# Initialize Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-ALLOWED_PROVIDERS = {"GROQ", "GEMINI"}
-
-async def set_llm_api_key(provider: str, api_key: str) -> Dict[str, Any]:
-    """Update the API key in the database and set it as an environment variable."""
-    if provider not in ALLOWED_PROVIDERS:
+async def set_sql_db_credentials(org_id: str, credentials: DatabaseConnection) -> Dict[str, Any]:
+    """Update or insert the database credentials for a given organization."""
+    if credentials.database_type not in ALLOWED_DB_PROVIDERS:
         return {
             "success": False,
-            "message": f"Invalid provider '{provider}'. Allowed values: {ALLOWED_PROVIDERS}",
+            "message": f"Invalid provider '{credentials.database_type}'. Allowed values: {ALLOWED_DB_PROVIDERS}",
         }
 
     try:
+        supabase = SupabaseProvider.get_client()
+
+        # Upsert: Replace existing row where org_id matches or insert if it doesn't exist
+        response = (
+            supabase.table("database_credentials")
+            .upsert({
+                "organization_id": org_id,
+                "database_type": credentials.database_type,
+                "host": credentials.host,
+                "port": credentials.port,
+                "dbname": credentials.dbname,
+                "username": credentials.username,
+                "password": credentials.password,  # Ensure this is secured properly!
+                "ssl": credentials.ssl,
+                "supabase_url": credentials.supabase_url,
+                "supabase_key": credentials.supabase_key,
+                "driver": credentials.driver
+            }, on_conflict=["organization_id"])
+            .execute()
+        )
+
+        if response.data:
+            return {"success": True, "message": f"{credentials.database_type} credentials updated successfully"}
+        else:
+            return {"success": False, "message": "Failed to update credentials"}
+
+    except Exception as e:
+        return {"success": False, "message": f"Database error while updating credentials: {str(e)}"}
+
+async def set_llm_api_key(llm_credentials: LLMConnection) -> Dict[str, Any]:
+    """Update the API key in the database and set it as an environment variable."""
+    if llm_credentials.provider not in ALLOWED_LLM_PROVIDERS:
+        return {
+            "success": False,
+            "message": f"Invalid provider '{llm_credentials.provider}'. Allowed values: {ALLOWED_LLM_PROVIDERS}",
+        }
+
+    try:
+        supabase = SupabaseProvider.get_client()
         # Delete existing API key to ensure only one row exists
         supabase.table("api_keys").delete().neq("id", 0).execute()
 
         # Insert the new API key
         response = (
             supabase.table("api_keys")
-            .insert({"provider": provider, "api_key": api_key})
+            .insert({
+                "provider": llm_credentials.provider, 
+                "api_key": llm_credentials.api_key,
+                })
             .execute()
         )
 
         if response.data:
-            # Remove all previous API key environment variables
-            for allowed_provider in ALLOWED_PROVIDERS:
-                env_var_name = f"{allowed_provider}_API_KEY"
-                if env_var_name in os.environ:
-                    del os.environ[env_var_name]  # Remove previous API key
-
-            # Set the new API key in the environment variable
-            current_env_var = f"{provider}_API_KEY"
-            os.environ[current_env_var] = api_key
-
-            # Clear the cached client so that subsequent calls reinitialize the LLM provider
-            from llm_provider import LLMProvider  # Adjust the import as needed
-            LLMProvider._client = None
-            LLMProvider._provider = None
-
-            return {"success": True, "message": f"{provider} API key updated successfully"}
+            return {"success": True, "message": f"{llm_credentials.provider} API key updated successfully"}
         else:
             return {"success": False, "message": "Failed to update API key"}
 
     except Exception as e:
         return {"success": False, "message": f"Database error while updating API key: {str(e)}"}
 
-def fetch_llm_api_key() -> Optional[str]:
+def fetch_sql_db_credentials(org_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve the API key for a given user ID from Supabase."""
     try:
+        supabase = SupabaseProvider.get_client()
+
+        response = (
+            supabase.table("database_credentials")
+            .select("*")
+            .eq("organization_id", org_id)
+            .maybe_single()
+            .execute()
+        )
+        return response.data if response.data else None
+    except Exception:
+        return None
+
+def fetch_llm_api_key() -> Optional[Dict[str, Any]]:
+    """Retrieve the API key for a given user ID from Supabase."""
+    try:
+        supabase = SupabaseProvider.get_client()
+
         response = (
             supabase.table("api_keys")
-            .select("provider","api_key")
+            .select("*")
             .maybe_single()
             .execute()
         )
@@ -73,19 +113,47 @@ def fetch_llm_api_key() -> Optional[str]:
         return None
 
 class ConversationMessage(BaseModel):
-    role: str  # "user" or "AI"
+    role: str  # "USER" or "AI"
     content: str
     timestamp: float
 
+# def execute_sql_query(query: str) -> Optional[List[dict]]:
+#     try:
+#         supabase = SupabaseProvider.get_client()
+#         response = supabase.rpc("execute_sql", {"query": query}).execute()
+#         return response.data
+    
+#     except Exception as e:
+#         raise
+
 def execute_sql_query(query: str) -> Optional[List[dict]]:
     try:
-        response = supabase.rpc("execute_sql", {"query": query}).execute()
-        return response.data
-    
+        conn = psycopg2.connect(
+            dbname="postgres",
+            user="postgres",
+            password="123456",
+            host="localhost",
+            port=5432
+        )
+        cursor = conn.cursor()
+        cursor.execute(query)
+        
+        if cursor.description:
+            columns = [desc[0] for desc in cursor.description]
+            results = cursor.fetchall()
+            data = [dict(zip(columns, row)) for row in results]
+        else:
+            data = None
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return data
     except Exception as e:
         raise
 
-async def get_database_schema():
+async def get_database_schema(org_id: str):
     # Unified SQL query to fetch both schema details and table-level view access.
     query = """
         SELECT 
@@ -111,15 +179,16 @@ async def get_database_schema():
                 '[]'::json
             ) AS view_access
         FROM information_schema.columns c
-        JOIN table_categories tc ON LOWER(c.table_name) = LOWER(tc.table_name)
         WHERE c.table_schema = 'public'
-        AND tc.category = 'store'
         ORDER BY c.table_name, c.ordinal_position
     """
-    
+
     # Execute the query using Supabase
-    response = supabase.rpc("execute_sql", {"query": query}).execute()
-    response_data = json.loads(response.model_dump_json())["data"]
+
+    response_data = execute_query(org_id, query)
+    
+    if response_data is None:
+        return {"tables": {}}
 
     # Map longer data type names to shorter versions
     type_mappings = {
@@ -152,14 +221,16 @@ async def get_database_schema():
     return output
 
 
-async def create_document_record(path: str, source_type: str) -> str:
+async def create_document_record(path: str, source_type: str, org_id: str) -> str:
     """Create initial document record and return document_id"""
     doc_data = {
+        "organization_id": org_id,
         "path": path,
         "source_type": source_type,
     }
 
     try:
+        supabase = SupabaseProvider.get_client()
         result = supabase.table("md_documents").insert(doc_data).execute()
         document_id = result.data[0]['document_id']
         return document_id
@@ -177,6 +248,7 @@ async def finalize_document(document_id: str, title: str, summary: str,
     }
 
     try:
+        supabase = SupabaseProvider.get_client()
         supabase.table("md_documents").update(update_data).eq("document_id", document_id).execute()
     except Exception as e:
         raise
@@ -192,7 +264,7 @@ def store_chunk(chunk: ProcessedChunk):
         "metadata": chunk.metadata,
         "embedding": chunk.embedding
     }
-
+    supabase = SupabaseProvider.get_client()
     result = supabase.table("md_chunks").insert(text_data).execute()
     chunk_id = result.data[0]['chunk_id']
 
@@ -208,9 +280,13 @@ def store_chunk(chunk: ProcessedChunk):
             }
             supabase.table("md_tables").insert(table_data).execute()
 
-async def retrieve_all_documents() -> List[Document]:
+async def retrieve_all_documents(org_id: str) -> List[Document]:
     try:
-        documents_result = supabase.from_('md_documents').select('document_id, title, summary').execute()
+        supabase = SupabaseProvider.get_client()
+        documents_result = supabase.table('md_documents') \
+            .select('document_id, title, summary') \
+            .eq("organization_id", org_id) \
+            .execute()
 
         if not documents_result.data:
             return []  # No documents found
@@ -230,6 +306,8 @@ async def retrieve_relevant_chunks(document_ids: List[int], user_query: str) -> 
     try:
         # Get the embedding for the query
         query_embedding = get_embedding(user_query)
+
+        supabase = SupabaseProvider.get_client()
 
         # Query Supabase for relevant documents
         result = supabase.rpc(
@@ -268,6 +346,7 @@ async def retrieve_relevant_chunks(document_ids: List[int], user_query: str) -> 
 
 async def retrieve_chunks_tables(chunk_ids: List[int]) -> List[str]:
     try:
+        supabase = SupabaseProvider.get_client()
 
         # Query Supabase for chunk tables
         result = supabase.from_('md_tables') \
@@ -288,6 +367,8 @@ async def retrieve_chunks_tables(chunk_ids: List[int]) -> List[str]:
 
 async def create_conversation_session(user_id): 
     try:   
+        supabase = SupabaseProvider.get_client()
+
         # If no existing conversation, create a new one
         response = supabase.table("conversations").insert(
             {"user_id": user_id}
@@ -301,6 +382,8 @@ async def create_conversation_session(user_id):
 
 async def get_conversation_session(user_id, conversation_id): 
     try:   
+        supabase = SupabaseProvider.get_client()
+
         # If no existing conversation, create a new one
         response = supabase.table("conversations") \
             .select("id, summary") \
@@ -321,6 +404,8 @@ async def get_conversation_session(user_id, conversation_id):
 async def update_conversation_summary(user_id: str, conversation_id: str, updated_summary: str, last_summarized_index):
     """Update the summary of a conversation for a given user."""
     try:   
+        supabase = SupabaseProvider.get_client()
+
         # If no existing conversation, create a new one
         response = supabase.table("conversations") \
             .update({
@@ -342,6 +427,8 @@ async def update_conversation_summary(user_id: str, conversation_id: str, update
 
 async def get_conversation_summary(user_id: str, conversation_id: str) -> List[dict] | None:
     try:
+        supabase = SupabaseProvider.get_client()
+
         response = supabase.table("conversations") \
             .select("summary, total_messages, last_summarized_message_count") \
             .eq("user_id", user_id) \
@@ -361,6 +448,8 @@ async def get_conversation_summary(user_id: str, conversation_id: str) -> List[d
 
 async def get_user_conversations(user_id: str) -> List[dict] | None:
     try:
+        supabase = SupabaseProvider.get_client()
+
         response = supabase.table("conversations") \
             .select("*") \
             .eq("user_id", user_id) \
@@ -379,6 +468,7 @@ async def get_user_conversations(user_id: str) -> List[dict] | None:
 
 async def get_conversation_messages(conversation_id, limit: Optional[int] = None)-> List[ConversationMessage] | None:
     try: 
+        supabase = SupabaseProvider.get_client()
 
         query = (
             supabase.table("messages")
@@ -409,6 +499,8 @@ async def save_conversation_messages(messages: list) -> list:
         if not messages:
             raise ValueError("At least one message must be provided.")
         
+        supabase = SupabaseProvider.get_client()
+
         response = supabase.table("messages").insert(messages).execute()
         if not response.data:
             return []
@@ -420,13 +512,15 @@ async def save_conversation_messages(messages: list) -> list:
         return []
 
 async def get_or_create_conversation_session_and_history(
-    user_id: str, conversation_id: str | None = None, history_limit: int = 8
+    user_id: int, conversation_id: str | None = None, history_limit: int = 8
 ):
     """
     Retrieves a conversation session with the last `history_limit` messages.
     If no valid conversation_id is provided, creates a new conversation.
     """
     # Call the custom SQL function via supabase.rpc.
+    supabase = SupabaseProvider.get_client()
+
     response = supabase.rpc(
         "get_or_create_conversation_session_and_history",
         {
@@ -449,6 +543,8 @@ async def get_or_create_conversation_session_and_history(
     
 async def get_unsummarized_messages(conversation_id: str, last_index: int):
     try:
+        supabase = SupabaseProvider.get_client()
+
         response = supabase.table("messages") \
             .select("role, text_content, created_at") \
             .eq("conversation_id", conversation_id) \
@@ -463,4 +559,67 @@ async def get_unsummarized_messages(conversation_id: str, last_index: int):
 
     except Exception as e:
         print(f"Error retrieving unsummarized messages: {e}")
+        return None
+
+async def register_organization(org_name: str, admin_email: str, admin_password: str):
+    try:
+        supabase = SupabaseProvider.get_client()
+
+        response = supabase.rpc(
+            "create_organization_admin",
+            {
+                "org_name": org_name,
+                "admin_email": admin_email,
+                "hashed_pw": admin_password
+            }
+        ).execute()
+
+        if not response.data:
+            return None
+
+        return response.data
+
+    except Exception as e:
+        print(f"Error registering organization: {e}")
+        return 
+
+async def get_user(user_email: str):
+    try:
+        supabase = SupabaseProvider.get_client()
+
+        response = supabase.table("users") \
+            .select("*") \
+            .eq("email", user_email) \
+            .maybe_single() \
+            .execute()
+
+        if not response.data:
+            return None
+
+        return response.data
+
+    except Exception as e:
+        print(f"Error retrieving user details: {e}")
+        return None
+    
+async def create_user(org_id: int, user_email: str, user_password: str, user_role: str):
+    try:
+        supabase = SupabaseProvider.get_client()
+
+        response = supabase.table("users") \
+            .insert({
+                "email": user_email,
+                "hashed_password": user_password,
+                "organization_id": org_id,
+                "role": user_role
+            }) \
+            .execute()
+
+        if not response.data:
+            return None
+
+        return response.data
+
+    except Exception as e:
+        print(f"Error registering organization: {e}")
         return None

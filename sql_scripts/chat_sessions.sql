@@ -1,4 +1,4 @@
-CREATE TABLE conversations (
+CREATE TABLE IF NOT EXISTS conversations (
     id BIGSERIAL PRIMARY KEY,
     user_id TEXT NOT NULL,
     summary TEXT,
@@ -7,7 +7,7 @@ CREATE TABLE conversations (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
-create table messages (
+CREATE TABLE IF NOT EXISTS messages (
     id bigserial primary key,
     conversation_id bigint references conversations(id),
     role varchar, -- User or AI
@@ -27,10 +27,19 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_update_total_messages
-AFTER INSERT ON messages
-FOR EACH ROW
-EXECUTE FUNCTION update_total_messages();
+DO $$ 
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM pg_trigger 
+        WHERE tgname = 'trigger_update_total_messages'
+    ) THEN
+        CREATE TRIGGER trigger_update_total_messages
+        AFTER INSERT ON messages
+        FOR EACH ROW
+        EXECUTE FUNCTION update_total_messages();
+    END IF;
+END $$;
 
 CREATE OR REPLACE FUNCTION get_or_create_conversation_session_and_history(
     p_user_id TEXT,
@@ -82,7 +91,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE INDEX idx_messages_conversation_created_at ON messages (conversation_id, created_at DESC);
+CREATE INDEX  IF NOT EXISTS idx_messages_conversation_created_at ON messages (conversation_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_conversations_id_user ON conversations (id, user_id);
 

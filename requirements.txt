@@ -13,3 +13,7 @@ tiktoken
 torch
 sentence_transformers
 playwright
+python-jose
+passlib
+bcrypt
+google-genai

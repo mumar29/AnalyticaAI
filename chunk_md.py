@@ -191,7 +191,7 @@ def process_chunk(chunk: str, chunk_number: int, doc_id: int) -> ProcessedChunk:
         tables= tables
     )
 
-async def process_document(content: Union[str, List[str]], path: str, source_type: str):
+async def process_document(content: Union[str, List[str]], path: str, source_type: str, org_id: str):
     """Process a single document end-to-end.
     
     Args:
@@ -200,7 +200,7 @@ async def process_document(content: Union[str, List[str]], path: str, source_typ
         source_type: The type of source (e.g., "pdf" or "webpage").
     """
     # Create initial document record
-    document_id = await create_document_record(path, source_type)
+    document_id = await create_document_record(path, source_type, org_id)
     
     chunk_summaries = []
     

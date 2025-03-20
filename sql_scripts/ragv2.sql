@@ -2,7 +2,7 @@
 create extension if not exists vector;
 
 -- Documents table
-CREATE TABLE md_documents (
+CREATE TABLE IF NOT EXISTS md_documents (
     document_id BIGSERIAL PRIMARY KEY,
     path VARCHAR NOT NULL UNIQUE,  -- Unique path constraint
     source_type VARCHAR NOT NULL,
@@ -14,7 +14,7 @@ CREATE TABLE md_documents (
 );
 
 -- Chunks table
-CREATE TABLE md_chunks (
+CREATE TABLE IF NOT EXISTS md_chunks (
     chunk_id BIGSERIAL PRIMARY KEY,
     document_id BIGINT REFERENCES md_documents(document_id) ON DELETE CASCADE,
     chunk_number INTEGER NOT NULL,
@@ -29,7 +29,7 @@ CREATE TABLE md_chunks (
 );
 
 -- Improved chunk tables relationship
-CREATE TABLE md_tables (
+CREATE TABLE IF NOT EXISTS md_tables (
     id BIGSERIAL PRIMARY KEY,
     chunk_id BIGINT REFERENCES md_chunks(chunk_id) ON DELETE CASCADE,
     document_id BIGINT REFERENCES md_documents(document_id) ON DELETE CASCADE,
@@ -42,15 +42,15 @@ CREATE TABLE md_tables (
 );
 
 -- Use HNSW for better performance (requires pgvector 0.5+)
-CREATE index ON md_documents USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+CREATE index IF NOT EXISTS ON md_documents USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 
-CREATE index ON md_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+CREATE index IF NOT EXISTS ON md_chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 
 -- Create an index on metadata for faster filtering
-create index idx_md_chunks_metadata on md_chunks using gin (metadata);
+create index IF NOT EXISTS idx_md_chunks_metadata on md_chunks using gin (metadata);
 
 -- Indexes for faster queries
-CREATE INDEX idx_md_tables_composite ON md_tables(document_id, chunk_id, table_hash);
+CREATE INDEX IF NOT EXISTS idx_md_tables_composite ON md_tables(document_id, chunk_id, table_hash);
 
 -- Create a function to search for documents
 CREATE OR REPLACE FUNCTION match_md_documents (
@@ -111,64 +111,3 @@ BEGIN
   LIMIT match_count;
 END;
 $$;
-
-
--- Everything above will work for any PostgreSQL database. The below commands are for Supabase security
-
--- Enable RLS on the table
-alter table md_documents enable row level security;
-
--- Create a policy that allows anyone to read
-create policy "Allow public read access"
-  on md_documents
-  for select
-  to public
-  using (true);
-
--- Allow public users to insert into md_documents
-CREATE POLICY "Allow public insert"
-  ON md_documents
-  FOR INSERT
-  TO public
-  WITH CHECK (true);
-
--- Allow public users to update md_documents
-CREATE POLICY "Allow public update"
-  ON md_documents
-  FOR UPDATE
-  TO public
-  USING (true);
-
--- Enable RLS on the table
-alter table md_chunks enable row level security;
-
--- Create a policy that allows anyone to read
-create policy "Allow public read access"
-  on md_chunks
-  for select
-  to public
-  using (true);
-
--- Allow public users to insert into md_chunks
-CREATE POLICY "Allow public insert"
-  ON md_chunks
-  FOR INSERT
-  TO public
-  WITH CHECK (true);
-
--- Enable RLS on the md_tables table
-ALTER TABLE md_tables ENABLE ROW LEVEL SECURITY;
-
--- Create a policy that allows anyone to read
-CREATE POLICY "Allow public read access"
-  ON md_tables
-  FOR SELECT
-  TO public
-  USING (true);
-
--- Allow public users to insert into md_tables
-CREATE POLICY "Allow public insert"
-  ON md_tables
-  FOR INSERT
-  TO public
-  WITH CHECK (true);

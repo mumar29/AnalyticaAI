@@ -119,8 +119,13 @@ async def process_docs(state: AgentState):
         
         new_query = refine_query(context)
         
-        chunk_ids, chunks_text = await retrieve_relevant_chunks(selected.ids, new_query.final_query)
-        chunk_tables = await retrieve_chunks_tables(chunk_ids)
+        chunk_ids_with_tables, chunks_text = await retrieve_relevant_chunks(selected.ids, new_query.final_query)
+        
+        chunk_tables = None  # Default to None
+
+        if chunk_ids_with_tables:  # Only call if the list is not empty
+            logger.debug("Chunk ids with tables are %s", chunk_ids_with_tables)
+            chunk_tables = await retrieve_chunks_tables(chunk_ids_with_tables)
 
         logger.debug("Retrieved document chunks: %s", chunks_text)
 

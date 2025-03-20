@@ -67,7 +67,7 @@ async def main():
         main_url = urlparse(urls[0]).netloc  # Example: "example.com"
 
         # Call process_document with a list of markdowns
-        await process_document(list(markdowns), main_url, "webpage")
+        await process_document(list(markdowns), main_url, "webpage", 5)
 
             # for result in results:
             #     if result.success:
@@ -80,33 +80,33 @@ async def main():
             #         print(f"Failed to crawl {result.url}: {result.error_message}")
     
     elif source_type == "pdf":
-    #     md_folder = "markdown"  # Folder where your extracted Markdown files are stored
-    #     md_files = [os.path.join(md_folder, f) for f in os.listdir(md_folder) if f.endswith(".md")]
+        md_folder = "markdown"  # Folder where your extracted Markdown files are stored
+        md_files = [os.path.join(md_folder, f) for f in os.listdir(md_folder) if f.endswith(".md")]
 
-    #     for md_path in md_files:
-    #         print(f"Processing Markdown File: {md_path}")
+        for md_path in md_files:
+            print(f"Processing Markdown File: {md_path}")
 
-    #         # Read the markdown file
-    #         with open(md_path, "r", encoding="utf-8") as f:
-    #             markdown_content = f.read()
+            # Read the markdown file
+            with open(md_path, "r", encoding="utf-8") as f:
+                markdown_content = f.read()
 
-    #         # Chunk and store the extracted markdown
-    #         await process_document(markdown_content, md_path, "pdf")
+            # Chunk and store the extracted markdown
+            await process_document(markdown_content, md_path, "pdf", 5)
 
-        pdf_folder = "pdfs"
-        pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.endswith(".pdf")]
+        # pdf_folder = "pdfs"
+        # pdf_files = [os.path.join(pdf_folder, f) for f in os.listdir(pdf_folder) if f.endswith(".pdf")]
 
-        parser = LlamaParse(result_type="markdown")
-        file_extractor = {".pdf": parser}
+        # parser = LlamaParse(result_type="markdown")
+        # file_extractor = {".pdf": parser}
 
-        for pdf_path in pdf_files:
-            print(f"Processing PDF: {pdf_path}")
+        # for pdf_path in pdf_files:
+        #     print(f"Processing PDF: {pdf_path}")
 
-            # Convert PDF to Markdown
-            documents = SimpleDirectoryReader(input_files=[pdf_path], file_extractor=file_extractor).load_data()
-            markdown_content = "\n".join([doc.text for doc in documents])
+        #     # Convert PDF to Markdown
+        #     documents = SimpleDirectoryReader(input_files=[pdf_path], file_extractor=file_extractor).load_data()
+        #     markdown_content = "\n".join([doc.text for doc in documents])
 
-            await process_document(markdown_content, pdf_path, "pdf")
+        #     await process_document(markdown_content, pdf_path, "pdf")
 
             # # Chunk and store the extracted markdown
             # chunks = chunk_markdownv2(markdown_content, chunk_size=2000)

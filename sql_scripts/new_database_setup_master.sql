@@ -217,7 +217,7 @@ CREATE OR REPLACE FUNCTION match_md_chunks (
   query_embedding vector(1024),
   match_count int DEFAULT 10,
   filter jsonb DEFAULT '{}',
-  p_document_ids bigint[] DEFAULT NULL  -- Change to an array of document IDs
+  p_document_ids bigint[] DEFAULT NULL  -- Array of document IDs
 ) RETURNS TABLE (
   chunk_id bigint,
   document_id bigint,
@@ -226,6 +226,7 @@ CREATE OR REPLACE FUNCTION match_md_chunks (
   summary varchar,
   keywords varchar[],
   content text,
+  metadata jsonb,
   similarity float
 ) LANGUAGE plpgsql AS $$
 BEGIN
@@ -238,6 +239,7 @@ BEGIN
     c.summary,
     c.keywords,
     c.content,
+    c.metadata,
     1 - (c.embedding <=> query_embedding) AS similarity
   FROM md_chunks c
   WHERE c.metadata @> filter

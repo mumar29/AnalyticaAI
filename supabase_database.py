@@ -12,6 +12,12 @@ from utils import execute_query
 ALLOWED_LLM_PROVIDERS = {"GROQ", "GEMINI"}
 ALLOWED_DB_PROVIDERS = {"postgresql", "mysql", "sqlserver", "supabase"}
 
+# from supabase import create_client
+
+# url = "https://sjuxnirhcipzwvpvkzdi.supabase.cO"
+# key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNqdXhuaXJoY2lwend2cHZremRpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDAzMzQyMTQsImV4cCI6MjA1NTkxMDIxNH0.sDaDFR6Z0zCHGjNWTUiYmwFrXBzzwrSz9JYN_jpQvG4"
+# supabase = create_client(url, key)
+
 async def set_sql_db_credentials(org_id: str, credentials: DatabaseConnection) -> Dict[str, Any]:
     """Update or insert the database credentials for a given organization."""
     if credentials.database_type not in ALLOWED_DB_PROVIDERS:
@@ -153,7 +159,7 @@ def execute_sql_query(query: str) -> Optional[List[dict]]:
     except Exception as e:
         raise
 
-async def get_database_schema(org_id: str):
+async def get_database_schema(org_id: int):
     # Unified SQL query to fetch both schema details and table-level view access.
     query = """
         SELECT 
@@ -183,8 +189,7 @@ async def get_database_schema(org_id: str):
         ORDER BY c.table_name, c.ordinal_position
     """
 
-    # Execute the query using Supabase
-
+    # Execute the query
     response_data = execute_query(org_id, query)
     
     if response_data is None:
@@ -264,6 +269,7 @@ def store_chunk(chunk: ProcessedChunk):
         "metadata": chunk.metadata,
         "embedding": chunk.embedding
     }
+
     supabase = SupabaseProvider.get_client()
     result = supabase.table("md_chunks").insert(text_data).execute()
     chunk_id = result.data[0]['chunk_id']
@@ -280,14 +286,14 @@ def store_chunk(chunk: ProcessedChunk):
             }
             supabase.table("md_tables").insert(table_data).execute()
 
-async def retrieve_all_documents(org_id: str) -> List[Document]:
+async def retrieve_all_documents(org_id: int) -> List[Document]:
     try:
         supabase = SupabaseProvider.get_client()
         documents_result = supabase.table('md_documents') \
             .select('document_id, title, summary') \
             .eq("organization_id", org_id) \
             .execute()
-
+        
         if not documents_result.data:
             return []  # No documents found
 
@@ -322,7 +328,11 @@ async def retrieve_relevant_chunks(document_ids: List[int], user_query: str) -> 
         if not result.data:
             return [], "No relevant documentation found."
             
-        chunk_ids = [doc['chunk_id'] for doc in result.data]
+        # Extract chunk IDs only if table_references is not empty
+        chunk_ids_with_tables = [
+            doc['chunk_id'] for doc in result.data
+            if doc.get('metadata', {}).get('table_references', [])
+        ]
 
         # Format the results
         formatted_chunks = []
@@ -338,7 +348,7 @@ async def retrieve_relevant_chunks(document_ids: List[int], user_query: str) -> 
             formatted_chunks.append(chunk_text)
 
         # Join all chunks with a separator
-        return chunk_ids, "\n\n---\n\n".join(formatted_chunks)
+        return chunk_ids_with_tables, "\n\n---\n\n".join(formatted_chunks)
         
     except Exception as e:
         print(f"Error retrieving documentation: {e}")

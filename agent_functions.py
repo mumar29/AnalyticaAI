@@ -70,6 +70,10 @@ class PerformanceReport(BaseModel):
 class Report(BaseModel):
     html: str
 
+class CSVHeaderCorrection(BaseModel):
+    original_headers: List[str]
+    revised_headers: List[str]
+
 class Instruction(BaseModel):
     id: int
     selectedText: str
@@ -227,10 +231,6 @@ def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> Tab
         user_content = f"context: {context_json}\n\nsql_schema:\n{schema_json}"
 
         response_content = generate_completion(system_prompt, user_content, TablesRetrieved.model_json_schema())
-
-        print("============================================================================================")
-        print(response_content)
-        print("============================================================================================")
         
         return TablesRetrieved.model_validate_json(response_content)
         
@@ -361,7 +361,31 @@ def update_strutured_report(instructions_data: UpdateReportRequest) -> Report:
             "details": str(e)
         }
 
-def get_chart_configs(csv_list: List[str], context: dict) -> ChartConfigList:
+def infer_missing_headers(csv: str, max_columns: int) -> CSVHeaderCorrection:
+    system_prompt = f"""
+        You are an expert in CSV data correction. The given CSV has a **header mismatch**: 
+        - The header row has **fewer columns** than the data rows. 
+        - Your task is to generate a revised **header row** that properly aligns with the data.
+        - **Do NOT** add extra columns beyond the detected number.
+
+        The number of column names you generate **must be exactly** {max_columns}.
+    """
+
+    try:
+        csv_json = json.dumps(csv , indent=2)
+
+        response_content = generate_completion(system_prompt, csv_json, CSVHeaderCorrection.model_json_schema())
+        
+        return CSVHeaderCorrection.model_validate_json(response_content)
+        
+    except Exception as e:
+        print(f"Error inferring missing headers: {e}")
+        return {
+            "error": "Failed to infer missing headers.",
+            "details": str(e)
+        }
+
+def get_chart_configs(csv_list: List[str], context: dict) -> Optional[ChartConfigList]:
     
     # system_prompt = f"""
     #     You are a data visualization expert. Given conversation context and a list of one or more CSV samples representing datasets, your task is as follows:
@@ -429,6 +453,7 @@ def get_chart_configs(csv_list: List[str], context: dict) -> ChartConfigList:
     """
 
     try:
+
         csv_collection = CSVCollection(
             csvs=[IndexedCSV(csv_index=i, content=csv) for i, csv in enumerate(csv_list)]
         )
@@ -446,11 +471,22 @@ def get_chart_configs(csv_list: List[str], context: dict) -> ChartConfigList:
         valid_charts = []
         
         for chart in raw_config.charts:
-            if 0 <= chart.csv_index < len(csv_list):
-                used_indices.add(chart.csv_index)
-                valid_charts.append(chart)
-            else:
-                print(f"Skipping invalid chart with csv_index {chart.csv_index}")
+            # Skip charts with invalid CSV indices
+            if not (0 <= chart.csv_index < len(csv_list)):
+                print(f"Skipping chart with invalid csv_index {chart.csv_index}")
+                continue
+                
+            # Skip charts where label_column and value_column are the same
+            if chart.mapping.label_column == chart.mapping.value_column:
+                print(f"Skipping chart with identical label and value columns: {chart.mapping.label_column}")
+                continue
+                
+            # Add to valid charts and track the used CSV index
+            used_indices.add(chart.csv_index)
+            valid_charts.append(chart)
+
+        if not valid_charts:
+            return None
 
         # Build minimal CSV collection
         minimal_csvs = [
@@ -465,7 +501,4 @@ def get_chart_configs(csv_list: List[str], context: dict) -> ChartConfigList:
 
     except Exception as e:
         print(f"Error getting chart config: {e}")
-        return {
-            "error": "Failed to generate chart configuration.",
-            "details": str(e)
-        }
+        return None

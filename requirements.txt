@@ -17,3 +17,8 @@ python-jose
 passlib
 bcrypt
 google-genai
+redis
+psycopg2
+pyodbc
+uvicorn
+gunicorn

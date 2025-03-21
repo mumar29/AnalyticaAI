@@ -165,6 +165,11 @@ async def websocket_endpoint(websocket: WebSocket):
 # Endpoints
 router = APIRouter(dependencies=[Depends(validate_api_key)])
 
+@router.get("/health")
+def health():
+    return {"status": "ok"}
+
+
 @router.post("/register")
 async def register_organization_endpoint(org_data: OrganizationCreate):
     """Create new organization with admin user"""

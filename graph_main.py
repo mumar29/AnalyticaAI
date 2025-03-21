@@ -1,4 +1,4 @@
-# main.py
+# graph_main.py
 import asyncio
 from contextlib import asynccontextmanager
 import json
@@ -165,10 +165,9 @@ async def websocket_endpoint(websocket: WebSocket):
 # Endpoints
 router = APIRouter(dependencies=[Depends(validate_api_key)])
 
-@router.get("/health")
+@router.get("/")
 def health():
     return {"status": "ok"}
-
 
 @router.post("/register")
 async def register_organization_endpoint(org_data: OrganizationCreate):

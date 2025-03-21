@@ -56,7 +56,7 @@ async def set_sql_db_credentials(org_id: str, credentials: DatabaseConnection) -
     except Exception as e:
         return {"success": False, "message": f"Database error while updating credentials: {str(e)}"}
 
-async def set_llm_api_key(llm_credentials: LLMConnection) -> Dict[str, Any]:
+async def set_llm_api_key(org_id: str, llm_credentials: LLMConnection) -> Dict[str, Any]:
     """Update the API key in the database and set it as an environment variable."""
     if llm_credentials.provider not in ALLOWED_LLM_PROVIDERS:
         return {
@@ -66,16 +66,14 @@ async def set_llm_api_key(llm_credentials: LLMConnection) -> Dict[str, Any]:
 
     try:
         supabase = SupabaseProvider.get_client()
-        # Delete existing API key to ensure only one row exists
-        supabase.table("api_keys").delete().neq("id", 0).execute()
 
-        # Insert the new API key
         response = (
             supabase.table("api_keys")
-            .insert({
-                "provider": llm_credentials.provider, 
+            .upsert({
+                "organization_id": org_id,
+                "provider": llm_credentials.provider,
                 "api_key": llm_credentials.api_key,
-                })
+            }, on_conflict=["organization_id"])
             .execute()
         )
 
@@ -103,7 +101,7 @@ def fetch_sql_db_credentials(org_id: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
-def fetch_llm_api_key() -> Optional[Dict[str, Any]]:
+def fetch_llm_api_key(org_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve the API key for a given user ID from Supabase."""
     try:
         supabase = SupabaseProvider.get_client()
@@ -111,6 +109,7 @@ def fetch_llm_api_key() -> Optional[Dict[str, Any]]:
         response = (
             supabase.table("api_keys")
             .select("*")
+            .eq("organization_id", org_id)
             .maybe_single()
             .execute()
         )
@@ -159,7 +158,7 @@ def execute_sql_query(query: str) -> Optional[List[dict]]:
     except Exception as e:
         raise
 
-async def get_database_schema(org_id: int):
+async def get_database_schema():
     # Unified SQL query to fetch both schema details and table-level view access.
     query = """
         SELECT 
@@ -190,7 +189,7 @@ async def get_database_schema(org_id: int):
     """
 
     # Execute the query
-    response_data = execute_query(org_id, query)
+    response_data = execute_query(query)
     
     if response_data is None:
         return {"tables": {}}
@@ -476,21 +475,18 @@ async def get_user_conversations(user_id: str) -> List[dict] | None:
         print(f"Error retrieving conversations: {e}")
         return None
 
-async def get_conversation_messages(conversation_id, limit: Optional[int] = None)-> List[ConversationMessage] | None:
+async def get_conversation_messages(user_id: int, conversation_id, limit: Optional[int] = None)-> List[ConversationMessage] | None:
     try: 
         supabase = SupabaseProvider.get_client()
 
-        query = (
-            supabase.table("messages")
-            .select("role", "text_content", "json_content", "created_at")
-            .eq("conversation_id", conversation_id)
-            .order("created_at", desc=True)  # Order by newest first
-        )
-
-        if limit:
-            query = query.limit(limit)
-
-        response = query.execute()
+        response = supabase.rpc(
+            "get_conversation_messages_for_user",
+            {
+                "p_user_id": user_id,
+                "p_conversation_id": conversation_id,  # Pass None for new conversations.
+                "p_history_limit": limit
+            }
+        ).execute()
 
         if not response.data:
             return None

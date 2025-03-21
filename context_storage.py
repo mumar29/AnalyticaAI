@@ -1,6 +1,7 @@
 import json
-from fastapi import HTTPException
 import hashlib
+import contextvars
+from fastapi import HTTPException
 
 context_cache = {}
 
@@ -13,3 +14,5 @@ def cache_context(context_data: dict) -> str:
     context_hash = hashlib.sha256(json.dumps(context_data).encode()).hexdigest()
     context_cache[context_hash] = context_data
     return context_hash
+
+CURRENT_ORG_ID = contextvars.ContextVar("CURRENT_ORG_ID")

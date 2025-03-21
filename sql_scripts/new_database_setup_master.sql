@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE TABLE IF NOT EXISTS api_keys (
     id bigserial PRIMARY KEY,
+    organization_id BIGINT UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
     provider text NOT NULL,
     api_key text NOT NULL,
     created_at timestamp default now()
@@ -130,6 +131,41 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION get_conversation_messages_for_user(
+    p_user_id BIGINT,
+    p_conversation_id BIGINT,
+    p_history_limit INTEGER
+)
+RETURNS JSON AS $$
+DECLARE
+    conv RECORD;
+    messages JSON;
+BEGIN
+    -- Retrieve the conversation by its ID.
+    SELECT * INTO conv
+    FROM conversations
+    WHERE id = p_conversation_id;
+
+    -- If the conversation doesn't exist or belongs to another user, return NULL.
+    IF NOT FOUND OR conv.user_id <> p_user_id THEN
+        RETURN NULL;
+    END IF;
+
+    -- Retrieve the conversation messages, ordered by creation date (newest first).
+    SELECT COALESCE(json_agg(sub), '[]'::json)
+    INTO messages
+    FROM (
+        SELECT m.*
+        FROM messages m
+        WHERE m.conversation_id = conv.id
+        ORDER BY m.created_at DESC
+        LIMIT p_history_limit
+    ) sub;
+
+    RETURN messages;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION get_or_create_conversation_session_and_history(
     p_user_id BIGINT,
     p_conversation_id BIGINT,
@@ -142,6 +178,7 @@ RETURNS TABLE(
 ) AS $$
 DECLARE
     conv RECORD;
+    msgs JSON;
 BEGIN
     -- Case 1: Conversation ID provided
     IF p_conversation_id IS NOT NULL THEN
@@ -154,22 +191,14 @@ BEGIN
             RETURN;
         END IF;
 
-        -- If conversation exists and belongs to the user, return it with messages
+        -- If conversation exists and belongs to the user, call the new function for messages
         IF FOUND THEN
+            msgs := get_conversation_messages_for_user(p_user_id, conv.id, p_history_limit);
             RETURN QUERY
             SELECT 
                 conv.id AS conversation_id,
                 conv.summary,
-                (
-                    SELECT COALESCE(json_agg(sub), '[]'::json)
-                    FROM (
-                        SELECT m.*
-                        FROM messages m
-                        WHERE m.conversation_id = conv.id
-                        ORDER BY m.created_at DESC
-                        LIMIT p_history_limit
-                    ) sub
-                ) AS messages;
+                msgs AS messages;
             RETURN;
         END IF;
     END IF;

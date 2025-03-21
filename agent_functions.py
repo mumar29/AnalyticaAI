@@ -1,7 +1,7 @@
 import json
 from typing import Any, Dict, List, Literal, Optional, Set
 from pydantic import BaseModel, model_validator
-from llm_provider import generate_completion
+from utils import generate_completion
 
 class IndexedCSV(BaseModel):
     csv_index: int

@@ -1,13 +1,11 @@
 import csv
 import io
 import os
-from typing import List, Dict, Optional
-
 import psycopg2
-import requests
-
-from agent_functions import call_llm
+from typing import List, Dict, Optional
+from context_storage import CURRENT_ORG_ID
 from database_provider import DatabaseProvider
+from llm_provider import LLMProvider
 
 def list_dict_to_csv(data: List[Dict]) -> str:
     if not data:
@@ -92,7 +90,8 @@ async def update_conversation_summary_incremental(user_id: str, session_id: str,
         Conversation:
         {new_messages_text}
         """
-
+    
+    from agent_functions import call_llm
     summary_result = call_llm(
         system_prompt="You are a helpful summarizer",
         user_content=prompt
@@ -163,5 +162,21 @@ def execute_sql_file(sql_file_path, db_url):
         return {"status": "error", "message": f"Database setup failed: {str(e)}"}
 
 # Convenience function for executing queries.
-def execute_query(org_id: int, query: str, params: Optional[dict] = None) -> Optional[List[dict]]:
+def execute_query(query: str, params: Optional[dict] = None) -> Optional[List[dict]]:
+    """
+    Convenience function that delegates to DatabaseProvider.execute_query
+    """
+    
+    org_id = CURRENT_ORG_ID.get()
+
     return DatabaseProvider.execute_query(org_id, query, params)
+
+# At the module level, after your LLMProvider class
+def generate_completion(system_prompt: str, user_content: str, response_schema: dict) -> str:
+    """
+    Convenience function that delegates to LLMProvider.generate_completion
+    """
+    
+    org_id = CURRENT_ORG_ID.get()
+
+    return LLMProvider.generate_completion(org_id, system_prompt, user_content, response_schema)

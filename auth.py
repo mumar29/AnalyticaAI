@@ -8,6 +8,8 @@ from jose import JWTError, jwt
 from pydantic import BaseModel, ValidationError
 from passlib.context import CryptContext
 
+from context_storage import CURRENT_ORG_ID
+
 # Load from environment variables
 SECRET_KEY = os.getenv("JWT_SECRET")
 ALGORITHM = "HS256"
@@ -34,6 +36,9 @@ def create_access_token(user: User):
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        
+        CURRENT_ORG_ID.set(int(payload["org_id"]))
+
         return User(
             id=int(payload["user_id"]),
             organization_id=int(payload["org_id"]),

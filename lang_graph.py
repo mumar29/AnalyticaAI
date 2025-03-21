@@ -8,7 +8,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from redis_config import get_redis_client
 
 from agent_functions import call_llm, classify_user_input, get_chart_configs, refine_query, select_relevant_documents, select_relevant_sql_tables
-from supabase_database import execute_sql_query, get_conversation_messages, get_conversation_session, get_database_schema, get_or_create_conversation_session_and_history, retrieve_all_documents, retrieve_chunks_tables, retrieve_relevant_chunks, save_conversation_messages
+from supabase_database import get_database_schema, get_or_create_conversation_session_and_history, retrieve_all_documents, retrieve_chunks_tables, retrieve_relevant_chunks, save_conversation_messages
 from logging_config import logger
 from utils import execute_query, json_default, list_dict_to_csv, update_conversation_summary_incremental
 from websocket_manager import manager
@@ -65,7 +65,7 @@ workflow.add_node("router", route_query)
 async def process_sql(state: AgentState):
     if state["data_source"] in ["both", "sql"]:
         logger.info("Processing SQL query for: %s", state["user_input"])
-        schema = await get_database_schema(state["org_id"])
+        schema = await get_database_schema()
 
         await manager.broadcast("Identifying relevant SQL tables and generating SQL queries") 
 
@@ -84,7 +84,7 @@ async def process_sql(state: AgentState):
         for query in tables.sql_queries:
             try:
                 logger.debug("Executing SQL query: %s", query)
-                result = execute_query(state["org_id"], query)
+                result = execute_query(query)
                 csv_result = list_dict_to_csv(result)
                 logger.debug("SQL query result: %s", csv_result)
                 results.append({"query": query, "data": csv_result})
@@ -311,7 +311,8 @@ async def handle_query(user_input: str, user_id: int, org_id: str, session_id: s
     }
     
     # Store context data in Redis as a JSON string with an expiration time (e.g., 1 hour)
-    redis_client.set(request_id, json.dumps(context_data), ex=3600)
+    request_key = f"user:{user_id}:request:{request_id}"
+    redis_client.set(request_key, json.dumps(context_data), ex=3600)
     
     final_response_data = result["final_response"]  # Extract the dictionary
 

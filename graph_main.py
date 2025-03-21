@@ -16,6 +16,7 @@ from llama_index.core import SimpleDirectoryReader
 from agent_functions import ChartConfigList, PerformanceReport, Report, UpdateReportRequest, generate_kpi_sql_queries, generate_performance_report, generate_structured_report, update_strutured_report
 from auth import User, create_access_token, get_current_user, get_password_hash, verify_password
 from chunk_md import process_document
+from context_storage import CURRENT_ORG_ID
 from crawler import crawl_website
 from database_provider import DatabaseProvider
 from lang_graph import handle_query
@@ -43,21 +44,32 @@ async def ensure_db_initialized(current_user: User = Depends(get_current_user)):
             detail=f"Failed to initialize database connection for org {current_user.organization_id}: {str(e)}"
         )
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Lifespan event to fetch API key once on startup."""
-    # request = fetch_sql_db_credentials()
-    # if request:
-    #     request_data = DatabaseConnection(**request)
-    #     DatabaseProvider.initialize(request_data)
+async def ensure_llm_initialized(current_user: User = Depends(get_current_user)):
+    try:
+        # This call will only fetch the configuration if no connection exists yet.
+        LLMProvider.get_or_initialize(current_user.organization_id)
 
-    credentials = fetch_llm_api_key()  # Fetch and store the API key on startup
-    print("Fetched credentials:", credentials)  # Debugging line
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to initialize LLM connection for org {current_user.organization_id}: {str(e)}"
+        )
 
-    if credentials:
-        request_data = LLMConnection(provider=credentials["provider"], api_key=credentials["api_key"])
-        LLMProvider.initialize(request_data)
-    yield  # Let FastAPI run
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     """Lifespan event to fetch API key once on startup."""
+#     request = fetch_sql_db_credentials()
+#     if request:
+#         request_data = DatabaseConnection(**request)
+#         DatabaseProvider.initialize(request_data)
+
+#     credentials = fetch_llm_api_key()  # Fetch and store the API key on startup
+#     print("Fetched credentials:", credentials)  # Debugging line
+
+#     if credentials:
+#         request_data = LLMConnection(provider=credentials["provider"], api_key=credentials["api_key"])
+#         LLMProvider.initialize(request_data)
+#     yield  # Let FastAPI run
 
 app = FastAPI(
     title="RAG Agent API",
@@ -65,7 +77,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
-    lifespan=lifespan
+    # lifespan=lifespan
 )
 
 # Security
@@ -211,6 +223,10 @@ async def set_sql_database(
 ):
     """Update database credentials using dynamic request parameters"""
     try:
+
+        if current_user.role != "admin":
+            raise HTTPException(403, "Admin privileges required")
+
         # Initialize database provider with validated request data
         response = await set_sql_db_credentials(current_user.organization_id, request)
 
@@ -254,26 +270,38 @@ def setup_main_database(
 @router.post("/set-llm-api-key")
 async def set_llm_api_key_endpoint(
     request: LLMConnection,
-    auth: bool = Depends(validate_api_key)
+    current_user: User = Depends(get_current_user),
 ):
     """Update LLM api key"""
     try:
-        LLMProvider.initialize(request)
 
-        response = await set_llm_api_key(request)
-        
-        return response
+        if current_user.role != "admin":
+            raise HTTPException(403, "Admin privileges required")
 
+        response = await set_llm_api_key(current_user.organization_id, request)
+
+        if response.get("success"):  # Ensure we check for a successful response
+            LLMProvider.get_or_initialize(current_user.organization_id)
+
+        return {
+            "status": "success",
+            "message": f"Updated {request.provider} api key",
+            "data": response
+        }
+
+    except HTTPException as http_exc:
+        raise http_exc
+    
     except Exception as e:
-        logger.error(f"Error updating LLM api key: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error updating LLM api key")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @router.post("/query", response_model=QueryResponse)
 @router.post("/query/{session_id}", response_model=QueryResponse)
 async def process_query_endpoint(
     request: QueryRequest,
     current_user: User = Depends(get_current_user),
-    _: None = Depends(ensure_db_initialized),
+    db_check: None = Depends(ensure_db_initialized),
+    llm_check: None = Depends(ensure_llm_initialized),
     session_id: Optional[str] = None
 ):
     """Main query endpoint for RAG system"""
@@ -301,13 +329,13 @@ async def process_query_endpoint(
         logger.error(f"Query failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
 
-@router.get("/get-conversations/{user_id}")
+@router.get("/get-conversations")
 async def get_user_conversations_endpoint(
-    user_id: str
+    current_user: User = Depends(get_current_user)
 ):
     """Retrieve all conversations for a user"""
     try:
-        conversations = await get_user_conversations(user_id)
+        conversations = await get_user_conversations(current_user.id)
         
         return conversations
 
@@ -318,25 +346,32 @@ async def get_user_conversations_endpoint(
 
 @router.get("/conversation-messages/{session_id}")
 async def get_conversation_endpoint(
-    session_id: str
+    session_id: str,
+    current_user: User = Depends(get_current_user)
 ):
     """Retrieve conversation history for a session"""
     try:
-        history = await get_conversation_messages(session_id)
-        
+        history = await get_conversation_messages(current_user.id, session_id)
+
+        if history is None:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+
         return {
             "session_id": session_id,
             "messages": history,
         }
-    
+
+    except HTTPException as e:
+        raise e
+
     except Exception as e:
         logger.error(f"Error retrieving conversation: {str(e)}")
         raise HTTPException(status_code=500, detail="Error retrieving conversation")
 
 @router.get("/get-company-health", response_model=PerformanceReport)
 async def get_company_health_endpoint(
-    current_user: User = Depends(get_current_user),
-    _: None = Depends(ensure_db_initialized),
+    db_check: None = Depends(ensure_db_initialized),
+    llm_check: None = Depends(ensure_llm_initialized)
 ):
     """
     Retrieves the SQL schema using get_database_schema,
@@ -344,7 +379,7 @@ async def get_company_health_endpoint(
     """
     try:
         # Retrieve the schema from your database
-        schema = await get_database_schema(current_user.organization_id)
+        schema = await get_database_schema()
         # If the returned schema has a "tables" key, use that; otherwise, assume it's a flat dict.
         tables = schema.get("tables", schema)
         
@@ -355,7 +390,7 @@ async def get_company_health_endpoint(
         for query in kpi_queries.sql_queries:
             try:
                 logger.debug("Executing SQL query: %s", query)
-                result = execute_query(current_user.organization_id, query)
+                result = execute_query(query)
                 logger.debug("SQL query result: %s", result)
                 results.append({"query": query, "data": result})
             except Exception as e:
@@ -373,13 +408,17 @@ async def get_company_health_endpoint(
         logger.error(f"Health Retrieval failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/generate-report/{request_id}", response_model=Report)
 async def generate_report_endpoint(
-    request_id: str
+    request_id: str,
+    current_user: User = Depends(get_current_user),
+    _: None = Depends(ensure_llm_initialized),
 ):
     """Generate a professional report from RAG context"""
 
-    context_data = redis_client.get(request_id)
+    request_key = f"user:{current_user.id}:request:{request_id}"
+    context_data = redis_client.get(request_key)
     if context_data is None:
         raise HTTPException(status_code=404, detail="No context data available for the given request ID.")
 
@@ -397,19 +436,17 @@ async def generate_report_endpoint(
 
 @router.post("/update_strutured_report", response_model=Report)
 async def update_strutured_report_endpoint(
-    instructions_data: UpdateReportRequest
+    instructions_data: UpdateReportRequest,
+    current_user: User = Depends(get_current_user),
+    _: None = Depends(ensure_llm_initialized),
 ):
     try:
-
         report = update_strutured_report(instructions_data)  
         return report
         
     except Exception as e:
         print(f"Error updating report: {e}")
-        return {
-            "error": "Failed to update report.",
-            "details": str(e)
-        }
+        raise HTTPException(status_code=500, detail=f"Failed to update report: {str(e)}")
 
 PDF_UPLOAD_FOLDER = "pdfs"
 GENERATED_MARKDOWN_FOLDER = "markdowns"
@@ -421,10 +458,14 @@ os.makedirs(GENERATED_MARKDOWN_FOLDER, exist_ok=True)
 async def process_pdf_endpoint(
     pdf: UploadFile = File(...),
     premium_mode: bool = Form(False),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    _: None = Depends(ensure_llm_initialized),
 ):
     """API endpoint to upload and process a PDF file."""
     
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+
     if pdf.content_type != "application/pdf" or not pdf.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed.")
     
@@ -461,9 +502,14 @@ async def process_pdf_endpoint(
 @router.post("/process-website")
 async def process_website_endpoint(
     request: UrlsRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    _: None = Depends(ensure_llm_initialized),
 ):
     try:
+
+        if current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="Admin privileges required")
+
         if not request.urls:
             raise HTTPException(status_code=400, detail="No URLs provided.")
         

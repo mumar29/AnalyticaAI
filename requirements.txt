@@ -20,5 +20,6 @@ google-genai
 redis
 psycopg2
 pyodbc
+pymysql
 uvicorn
 gunicorn

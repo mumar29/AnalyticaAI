@@ -1,5 +1,6 @@
 import json
 from typing import Any, Dict, List, Literal, Optional, Set
+from fastapi import HTTPException
 from pydantic import BaseModel, model_validator
 from utils import generate_completion
 
@@ -101,7 +102,68 @@ def call_llm(system_prompt: str, user_content: str) -> LLMResponse:
     
     except Exception as e:
         print(f"LLM call failed: {e}")
-        return LLMResponse(content=f"Error: {str(e)}")
+        raise e
+    
+def generate_final_response(user_content: str, needs_rag: bool, is_admin: bool) -> LLMResponse:
+
+    if needs_rag:
+        base_prompt = (
+            "You are a data analyst. Given the user's query and the accompanying context data, generate a coherent, concise, and thorough response. "
+            "If the available data cannot directly answer the query, inform the user that this may be due to missing data{}."
+        )
+        # If the user is admin, they have highest level access so we exclude the access permissions message.
+        access_note = "" if is_admin else ", or insufficient access permissions"
+        system_prompt = base_prompt.format(access_note)
+    else:
+        system_prompt = "You are a helpful assistant"
+
+    try:
+        response_content = generate_completion(system_prompt, user_content, LLMResponse.model_json_schema())
+        return LLMResponse.model_validate_json(response_content)
+    
+    except Exception as e:
+        print(f"Failed to generate final response: {e}")
+        raise e
+
+def generate_conversation_summary(new_messages: str, existing_summary: str | None) -> LLMResponse:
+    """Generates an updated conversation summary using LLM."""
+
+    system_prompt="You are a conversation summarizer"
+
+    if existing_summary:
+        user_prompt = f"""
+        You are an expert summarizer specializing in maintaining and updating conversation context. 
+        Update the existing conversation summary by integrating the new messages provided below. 
+        Ensure that the updated summary is concise, informative, and accurately captures the key points, 
+        important terms, and essential context from both the USER and AI. In this updated summary, please give 
+        extra weight to the most recent interactions to highlight the latest context, while still retaining 
+        critical information from earlier in the conversation.
+
+        Existing Summary:
+        {existing_summary}
+
+        New Messages:
+        {new_messages}
+
+        Provide an updated, concise, and informative summary that effectively combines both.
+        """
+    else:
+        user_prompt = f"""
+        You are an expert summarizer specializing in conversation context management. 
+        Summarize the conversation below in a concise and informative manner, capturing key points, 
+        important terms, and essential data from both the USER and AI. In your summary, please prioritize 
+        the most recent interactions to ensure that the latest context is emphasized.
+
+        Conversation:
+        {new_messages}
+        """
+    try:
+        response_content = generate_completion(system_prompt, user_prompt, LLMResponse.model_json_schema())
+        return LLMResponse.model_validate_json(response_content)
+    
+    except Exception as e:
+        print(f"Failed to generate final response: {e}")
+        raise e
     
 def refine_query(context: dict) -> RefineQueryResponse:
     
@@ -130,7 +192,7 @@ def refine_query(context: dict) -> RefineQueryResponse:
     
     except Exception as e:
         print(f"LLM call failed: {e}")
-        return RefineQueryResponse(content=f"Error: {str(e)}")
+        raise e
 
 def classify_user_input(context: dict) -> ClassifyInput:
 
@@ -155,14 +217,9 @@ def classify_user_input(context: dict) -> ClassifyInput:
         return ClassifyInput.model_validate_json(response_content)
 
     except Exception as e:
-        print(f"Error getting chart config: {e}")
-        return {
-            "error": "Failed to generate chart configuration.",
-            "details": str(e)
-        }
-
-
-
+        print(f"Failed to classify user input: {e}")
+        raise e
+    
 def select_relevant_documents(documents: List[Document], context: dict) -> Doc_Ids:
     system_prompt = f"""
     You are an expert document selector. Analyze which documents could help answer the query considering both the current request and conversation history (if given).
@@ -190,10 +247,7 @@ def select_relevant_documents(documents: List[Document], context: dict) -> Doc_I
         
     except Exception as e:
         print(f"Error selecting relevant documents: {e}")
-        return {
-            "error": "Failed to select relevant documents.",
-            "details": str(e)
-        }
+        raise e
 
 def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> TablesRetrieved:
     system_prompt = f"""
@@ -236,11 +290,7 @@ def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> Tab
         
     except Exception as e:
         print(f"Error selecting relevant SQL sources: {e}")
-        return {
-            "error": "Failed to select relevant SQL sources.",
-            "details": str(e)
-        }
-
+        raise e
 
 def generate_kpi_sql_queries(sql_schema: Dict[str, Any]) -> KPIQueriesRetrieved:
     system_prompt = f"""
@@ -270,10 +320,7 @@ def generate_kpi_sql_queries(sql_schema: Dict[str, Any]) -> KPIQueriesRetrieved:
         
     except Exception as e:
         print(f"Error generating KPI SQL queries: {e}")
-        return {
-            "error": "Failed to generate KPI SQL queries.",
-            "details": str(e)
-        }
+        raise e
 
 def generate_performance_report(sql_results: List[Dict[str, Any]]) -> PerformanceReport:
     system_prompt = f"""
@@ -298,7 +345,7 @@ def generate_performance_report(sql_results: List[Dict[str, Any]]) -> Performanc
         
     except Exception as e:
         print(f"Error generating performance report: {e}")
-        return PerformanceReport(report=f"Error: {str(e)}")
+        raise e
     
 def generate_structured_report(context_data: Dict[str, Any]) -> Report:
     system_prompt = f"""
@@ -328,10 +375,7 @@ def generate_structured_report(context_data: Dict[str, Any]) -> Report:
         
     except Exception as e:
         print(f"Error generating report: {e}")
-        return {
-            "error": "Failed to generate report.",
-            "details": str(e)
-        }
+        raise e
 
 def update_strutured_report(instructions_data: UpdateReportRequest) -> Report:
     system_prompt = f"""You are an HTML Report Updater that produces updated, complete, professional business reports in HTML format.
@@ -356,10 +400,7 @@ def update_strutured_report(instructions_data: UpdateReportRequest) -> Report:
         
     except Exception as e:
         print(f"Error updating report: {e}")
-        return {
-            "error": "Failed to update report.",
-            "details": str(e)
-        }
+        raise e
 
 def infer_missing_headers(csv: str, max_columns: int) -> CSVHeaderCorrection:
     system_prompt = f"""
@@ -380,10 +421,8 @@ def infer_missing_headers(csv: str, max_columns: int) -> CSVHeaderCorrection:
         
     except Exception as e:
         print(f"Error inferring missing headers: {e}")
-        return {
-            "error": "Failed to infer missing headers.",
-            "details": str(e)
-        }
+        raise e
+
 
 def get_chart_configs(csv_list: List[str], context: dict) -> Optional[ChartConfigList]:
     
@@ -501,4 +540,4 @@ def get_chart_configs(csv_list: List[str], context: dict) -> Optional[ChartConfi
 
     except Exception as e:
         print(f"Error getting chart config: {e}")
-        return None
+        raise e

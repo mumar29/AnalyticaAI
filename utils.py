@@ -3,6 +3,7 @@ import io
 import os
 import psycopg2
 from typing import List, Dict, Optional
+from agent_functions import generate_conversation_summary
 from context_storage import CURRENT_ORG_ID
 from database_provider import DatabaseProvider
 from llm_provider import LLMProvider
@@ -62,46 +63,12 @@ async def update_conversation_summary_incremental(user_id: str, session_id: str,
         [f"{msg['role']}: {msg['text_content']}" for msg in unsummarized_messages]
     )
 
-    # Build the summarization prompt, chaining with the existing summary if available.
-    if session.get("summary"):
-        prompt = f"""
-        You are an expert summarizer specializing in maintaining and updating conversation context. 
-        Update the existing conversation summary by integrating the new messages provided below. 
-        Ensure that the updated summary is concise, informative, and accurately captures the key points, 
-        important terms, and essential context from both the USER and AI. In this updated summary, please give 
-        extra weight to the most recent interactions to highlight the latest context, while still retaining 
-        critical information from earlier in the conversation.
-
-        Existing Summary:
-        {session['summary']}
-
-        New Messages:
-        {new_messages_text}
-
-        Provide an updated, concise, and informative summary that effectively combines both.
-        """
-    else:
-        prompt = f"""
-        You are an expert summarizer specializing in conversation context management. 
-        Summarize the conversation below in a concise and informative manner, capturing key points, 
-        important terms, and essential data from both the USER and AI. In your summary, please prioritize 
-        the most recent interactions to ensure that the latest context is emphasized.
-
-        Conversation:
-        {new_messages_text}
-        """
-    
-    from agent_functions import call_llm
-    summary_result = call_llm(
-        system_prompt="You are a helpful summarizer",
-        user_content=prompt
-    )
-    updated_summary = summary_result.content
+    summary_result = generate_conversation_summary(new_messages_text, session.get("summary"))
 
     # Update the conversation session: set the new summary and update last_summarized_index to the current index.
-    await update_conversation_summary(user_id, session_id, updated_summary, current_index)
+    await update_conversation_summary(user_id, session_id, summary_result.content, current_index)
 
-    return updated_summary
+    return summary_result.content
 
 def save_credentials_to_env(url, key):
     # Read the existing .env file

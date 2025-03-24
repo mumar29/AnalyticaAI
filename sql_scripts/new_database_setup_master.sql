@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 CREATE TABLE IF NOT EXISTS md_documents (
     document_id BIGSERIAL PRIMARY KEY,
     organization_id BIGINT REFERENCES organizations(id) ON DELETE CASCADE,
+    access_level VARCHAR NOT NULL DEFAULT 'member',
     path VARCHAR NOT NULL UNIQUE,  -- Unique path constraint
     source_type VARCHAR NOT NULL,
     title VARCHAR,
@@ -81,6 +82,15 @@ CREATE TABLE IF NOT EXISTS md_tables (
     csv_data TEXT NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     UNIQUE(table_hash, chunk_id)
+);
+
+CREATE TABLE IF NOT EXISTS database_access_control (
+    id BIGSERIAL PRIMARY KEY,
+    organization_id BIGINT REFERENCES organizations(id) ON DELETE CASCADE,
+    table_name VARCHAR NOT NULL,
+    access_level VARCHAR NOT NULL DEFAULT 'member',
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    UNIQUE (organization_id, table_name)  -- Ensures each table has one access entry per organization
 );
 
 CREATE TABLE IF NOT EXISTS database_credentials (

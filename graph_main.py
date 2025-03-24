@@ -7,7 +7,7 @@ import os
 from urllib.parse import urlparse
 import aiofiles
 import uvicorn
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 from fastapi import FastAPI, APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ValidationError
@@ -23,7 +23,7 @@ from lang_graph import handle_query
 from llm_provider import LLMConnection, LLMProvider
 from logging_config import logger
 from models import DatabaseConnection
-from supabase_database import create_user, fetch_sql_db_credentials, get_user, register_organization, set_llm_api_key, fetch_llm_api_key, get_conversation_messages, get_database_schema, get_user_conversations, set_sql_db_credentials
+from supabase_database import create_user, fetch_sql_db_credentials, get_user, register_organization, set_llm_api_key, fetch_llm_api_key, get_conversation_messages, get_database_schema, get_user_conversations, set_sql_db_credentials, update_control_table_access, update_document_access
 from supabase_provider import SupabaseProvider
 from utils import execute_query, json_default, save_credentials_to_env
 from websocket_manager import manager
@@ -91,6 +91,14 @@ async def validate_api_key(api_key: str = Depends(api_key_header)):
 # Models
 class QueryRequest(BaseModel):
     text: str
+
+class UpdateTableAccessRequest(BaseModel):
+    table_name: str
+    access_level: Literal["admin", "manager", "member"]
+
+class UpdateDocumentAccessRequest(BaseModel):
+    doc_id: int
+    access_level: Literal["admin", "manager", "member"]
 
 class QueryResponse(BaseModel):
     session_id: str
@@ -313,7 +321,7 @@ async def process_query_endpoint(
         start_time = time.time()
         
         # Execute workflow
-        result = await handle_query(request.text, current_user.id, current_user.organization_id, session_id)
+        result = await handle_query(request.text, current_user.id, current_user.organization_id, current_user.role, session_id)
 
         print("Got handle_query result")
         
@@ -540,6 +548,56 @@ async def process_website_endpoint(
             status_code=500,
             detail=f"Error processing website: {str(e)}"
         )
+
+@router.post("/update_table_access_level")
+async def update_table_access_level_endpoint(
+    request: UpdateTableAccessRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Update Table Access Level"""
+    try:
+
+        if current_user.role != "admin":
+            raise HTTPException(403, "Admin privileges required")
+
+        response = await update_control_table_access(current_user.organization_id, request.table_name, request.access_level)
+
+        if response:
+            return {
+                "status": "success",
+                "message": f"Access level updated of table {request.table_name} to {request.access_level} successfully"
+            }
+
+    except HTTPException as http_exc:
+        raise http_exc
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@router.post("/update_document_access_level")
+async def update_document_access_level_endpoint(
+    request: UpdateDocumentAccessRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Update Table Access Level"""
+    try:
+
+        if current_user.role != "admin":
+            raise HTTPException(403, "Admin privileges required")
+
+        response = await update_document_access(current_user.organization_id, request.doc_id, request.access_level)
+
+        if response:
+            return {
+                "status": "success",
+                "message": f"Access level updated of table {request.doc_id} to {request.access_level} successfully"
+            }
+
+    except HTTPException as http_exc:
+        raise http_exc
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 app.include_router(router, prefix="/api/v1")
 

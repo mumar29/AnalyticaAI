@@ -222,8 +222,61 @@ async def get_database_schema():
 
     # Wrap the result in a top-level "tables" key for clarity
     output = {"tables": schema}
+
     return output
 
+async def get_filtered_schema(organization_id: int, access_level: str = "member") -> dict:
+
+    access_hierarchy = {
+        "member": 1,
+        "manager": 2,
+        "admin": 3
+    }
+
+    # Step 1: Retrieve the dynamic database schema.
+    schema = await get_database_schema()
+    dynamic_tables = set(schema.get("tables", {}).keys())
+    
+    # Step 2: Retrieve current control entries for this organization.
+    control_entries = await get_control_tables(organization_id)
+    control_tables = set(entry["table_name"] for entry in (control_entries or []))
+    
+    # Step 3a: Insert missing tables with default "member" access.
+    new_tables = dynamic_tables - control_tables
+    if new_tables:
+        entries = [
+            {"organization_id": organization_id, "table_name": table}
+            for table in new_tables
+        ]
+        await insert_control_tables(entries)
+    
+    # Step 3b: Delete stale entries (tables no longer in the dynamic schema).
+    stale_tables = control_tables - dynamic_tables
+    if stale_tables:
+        await delete_control_tables(organization_id, list(stale_tables))
+    
+    # Create a lookup for access level per table.
+    control_lookup = {entry["table_name"]: entry["access_level"] for entry in (control_entries or [])}
+    
+    # Create a copy to avoid modifying the original
+    filtered_schema = schema.copy()
+    tables_to_remove = []
+    
+    # Iterate over table keys directly (or unpack the items)
+    for table, details in schema.get("tables", {}).items():
+        # Default to "member" if not found in the control lookup.
+        table_access = control_lookup.get(table, "member")
+        # Check if the table's access level rank is higher than the user's access level rank.
+        if access_hierarchy.get(table_access, 1) > access_hierarchy.get(access_level, 1):
+            tables_to_remove.append(table)
+    
+    # Remove tables that don't match the access level
+    for table in tables_to_remove:
+        if table in filtered_schema.get("tables", {}):
+            filtered_schema["tables"].pop(table)
+    
+    print("Filtered SQL Schema is \n", filtered_schema)
+    return filtered_schema
 
 async def create_document_record(path: str, source_type: str, org_id: str) -> str:
     """Create initial document record and return document_id"""
@@ -239,7 +292,7 @@ async def create_document_record(path: str, source_type: str, org_id: str) -> st
         document_id = result.data[0]['document_id']
         return document_id
     except Exception as e:
-        raise
+        raise e
 
 async def finalize_document(document_id: str, title: str, summary: str, 
                             keywords: List[str], embedding: List[float]):
@@ -255,7 +308,7 @@ async def finalize_document(document_id: str, title: str, summary: str,
         supabase = SupabaseProvider.get_client()
         supabase.table("md_documents").update(update_data).eq("document_id", document_id).execute()
     except Exception as e:
-        raise
+        raise e
 
 def store_chunk(chunk: ProcessedChunk):
     text_data = {
@@ -285,12 +338,23 @@ def store_chunk(chunk: ProcessedChunk):
             }
             supabase.table("md_tables").insert(table_data).execute()
 
-async def retrieve_all_documents(org_id: int) -> List[Document]:
+async def retrieve_all_documents(org_id: int, access_level: str = "member") -> List[Document]:
+
+    role_hierarchy = {
+        "admin": ["admin", "manager", "member"],
+        "manager": ["manager", "member"],
+        "member": ["member"]
+    }
+
+    # Get allowed access levels based on the provided access_level
+    allowed_levels = role_hierarchy.get(access_level, ["member"]) 
+
     try:
         supabase = SupabaseProvider.get_client()
         documents_result = supabase.table('md_documents') \
             .select('document_id, title, summary') \
             .eq("organization_id", org_id) \
+            .in_("access_level", allowed_levels) \
             .execute()
         
         if not documents_result.data:
@@ -300,7 +364,7 @@ async def retrieve_all_documents(org_id: int) -> List[Document]:
             Document(id=doc["document_id"], title=doc["title"], summary=doc["summary"])
             for doc in documents_result.data
         ]
-
+        
         return documents
         
     except Exception as e:
@@ -628,4 +692,112 @@ async def create_user(org_id: int, user_email: str, user_password: str, user_rol
 
     except Exception as e:
         print(f"Error registering organization: {e}")
+        return None
+    
+async def get_control_tables(organization_id: int) -> List[dict] | None:
+    """
+    Retrieve all control entries for a given organization.
+    """
+    try:
+        supabase = SupabaseProvider.get_client()
+        response = supabase.table("database_access_control") \
+            .select("table_name, access_level") \
+            .eq("organization_id", organization_id) \
+            .execute()
+        
+        if not response.data:
+            return None
+
+        return response.data
+    
+    except Exception as e:
+        print(f"Error retrieving control entries: {e}")
+        return None
+
+async def insert_control_tables(new_tables: list):
+    """
+    Insert a new control entry for the given organization and table with the specified access level.
+    """
+    try:
+        supabase = SupabaseProvider.get_client()
+        response = supabase.table("database_access_control").insert(new_tables).execute()
+
+        if not response.data:
+            return None
+
+        return response.data
+    
+    except Exception as e:
+        print(f"Error inserting control entry: {e}")
+        return None
+
+
+async def delete_control_tables(organization_id: int, table_names: list):
+    """
+    Delete multiple control entries for the given organization and list of tables.
+    """
+    try:
+        supabase = SupabaseProvider.get_client()
+        response = (
+            supabase
+            .table("database_access_control")
+            .delete()
+            .match({"organization_id": organization_id})
+            .in_("table_name", table_names)
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return response.data
+
+    except Exception as e:
+        print(f"Error deleting control entries: {e}")
+        return None
+
+async def update_control_table_access(organization_id: int, table_name: str, new_access_level: str):
+    """
+    Update the access level of a specific table for a given organization.
+    """
+    try:
+        supabase = SupabaseProvider.get_client()
+        response = (
+            supabase
+            .table("database_access_control")
+            .update({"access_level": new_access_level})
+            .match({"organization_id": organization_id, "table_name": table_name})
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return response.data
+
+    except Exception as e:
+        print(f"Error updating access level for table {table_name}: {e}")
+        return None
+
+async def update_document_access(organization_id: int, doc_id: int, new_access_level: str):
+    """
+    Update the access level of a specific document for a given organization.
+    """
+    try:
+        supabase = SupabaseProvider.get_client()
+        response = (
+            supabase
+            .table("md_documents")
+            .update({"access_level": new_access_level})
+            .match({"organization_id": organization_id, "document_id": doc_id})
+            .execute()
+        )
+
+        if not response.data:
+            return None
+
+        return response.data
+
+    except Exception as e:
+        print(f"Error updating access level for document {doc_id}: {e}")
         return None

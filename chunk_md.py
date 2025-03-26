@@ -4,7 +4,8 @@ from markdown_it import MarkdownIt
 from urllib.parse import urlparse
 from langchain.text_splitter import MarkdownTextSplitter
 
-from LLM_analysis import get_embedding, get_keywords, get_title_and_summary
+from LLM_analysis import get_embedding, get_keywords
+from agent_functions import generate_title_and_summary
 from mdTocsv import get_md_tables
 
 from models import ProcessedChunk
@@ -136,7 +137,7 @@ def chunk_markdownv1(text: str, chunk_size: int) -> List[str]:
 def process_chunk(chunk: str, chunk_number: int, doc_id: int) -> ProcessedChunk:
     """Process a single chunk of text."""
     # Get title and summary
-    content = get_title_and_summary(chunk)
+    content = generate_title_and_summary(chunk)
 
     # Get keywords
     keywords = get_keywords(chunk)
@@ -182,8 +183,8 @@ def process_chunk(chunk: str, chunk_number: int, doc_id: int) -> ProcessedChunk:
     return ProcessedChunk(
         document_id= doc_id,
         chunk_number= chunk_number,
-        title= content['title'],
-        summary= content['summary'],
+        title= content.title,
+        summary= content.summary,
         keywords= keywords,
         content= chunk,
         metadata= metadata,
@@ -227,18 +228,18 @@ async def process_document(content: Union[str, List[str]], path: str, source_typ
     # Use the first piece of content for title context (or any other heuristic)
     first_content = content[0] if isinstance(content, list) else content
     
-    doc_content = get_title_and_summary(first_content + combined_chunk_summaries, "8-10")
+    doc_content = generate_title_and_summary(first_content + combined_chunk_summaries, "8-10")
     
     # If content is a list, combine all markdowns for keyword extraction
     all_markdown = "\n".join(content) if isinstance(content, list) else content
     doc_keywords = get_keywords(all_markdown, 15)
-    doc_embedding = get_embedding(doc_content['summary'])
+    doc_embedding = get_embedding(doc_content.summary)
     
     # Finalize document record
     await finalize_document(
         document_id=document_id,
-        title=doc_content['title'],
-        summary=doc_content['summary'],
+        title= doc_content.title,
+        summary= doc_content.summary,
         keywords=doc_keywords,
         embedding=doc_embedding
     )

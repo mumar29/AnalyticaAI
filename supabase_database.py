@@ -349,6 +349,11 @@ async def retrieve_all_documents(org_id: int, access_level: str = "member") -> L
     # Get allowed access levels based on the provided access_level
     allowed_levels = role_hierarchy.get(access_level, ["member"]) 
 
+    print("======================================================================")
+    print("Allowed access levels are \n", allowed_levels)
+    print("======================================================================")
+
+
     try:
         supabase = SupabaseProvider.get_client()
         documents_result = supabase.table('md_documents') \
@@ -360,18 +365,24 @@ async def retrieve_all_documents(org_id: int, access_level: str = "member") -> L
         if not documents_result.data:
             return []  # No documents found
 
+        print("======================================================================")
+        print("Raw documents retrieved are \n", documents_result.data)
+        print("======================================================================")
+
         documents = [
             Document(id=doc["document_id"], title=doc["title"], summary=doc["summary"])
             for doc in documents_result.data
+            if doc["title"] is not None and doc["summary"] is not None
         ]
-        
+
         return documents
         
     except Exception as e:
-        print(f"Error retrieving documentation: {e}")
+        print(f"Error retrieving accessible documentation: {e}")
         return []
 
 async def retrieve_relevant_chunks(document_ids: List[int], user_query: str) -> Tuple[List[int], str]:
+    
     try:
         # Get the embedding for the query
         query_embedding = get_embedding(user_query)
@@ -389,7 +400,7 @@ async def retrieve_relevant_chunks(document_ids: List[int], user_query: str) -> 
         ).execute()
         
         if not result.data:
-            return [], "No relevant documentation found."
+            return [], "No relevant documentation chunks found."
             
         # Extract chunk IDs only if table_references is not empty
         chunk_ids_with_tables = [
@@ -397,25 +408,18 @@ async def retrieve_relevant_chunks(document_ids: List[int], user_query: str) -> 
             if doc.get('metadata', {}).get('table_references', [])
         ]
 
-        # Format the results
-        formatted_chunks = []
-
         # Process all chunks to build formatted output and find the most relevant CSV data
-        for doc in result.data:
-            # Format the chunk for output
-            chunk_text = f"""
-                # {doc['title']}
-
-                {doc['content']}
-                """
-            formatted_chunks.append(chunk_text)
+        chunk_texts = [
+            {"title": doc['title'], "content": doc['content']}
+            for doc in result.data
+        ]
 
         # Join all chunks with a separator
-        return chunk_ids_with_tables, "\n\n---\n\n".join(formatted_chunks)
+        return chunk_ids_with_tables, chunk_texts
         
     except Exception as e:
-        print(f"Error retrieving documentation: {e}")
-        return [], f"Error retrieving documentation: {str(e)}"
+        print(f"Error retrieving documentation chunks: {e}")
+        return [], f"Error retrieving documentation chunks: {str(e)}"
 
 async def retrieve_chunks_tables(chunk_ids: List[int]) -> List[str]:
     try:
@@ -435,7 +439,7 @@ async def retrieve_chunks_tables(chunk_ids: List[int]) -> List[str]:
         return csv_data_list  # Return list of csv_data values
         
     except Exception as e:
-        print(f"Error retrieving documentation: {e}")
+        print(f"Error retrieving documentation tables: {e}")
         return []
 
 async def create_conversation_session(user_id): 

@@ -3,10 +3,13 @@ import io
 import os
 import psycopg2
 from typing import List, Dict, Optional
-from agent_functions import generate_conversation_summary
 from context_storage import CURRENT_ORG_ID
 from database_provider import DatabaseProvider
 from llm_provider import LLMProvider
+from decimal import Decimal
+from datetime import datetime, date, time
+import uuid
+from io import StringIO
 
 def list_dict_to_csv(data: List[Dict]) -> str:
     if not data:
@@ -21,9 +24,21 @@ def list_dict_to_csv(data: List[Dict]) -> str:
 
     return output.getvalue()
 
-from decimal import Decimal
-from datetime import datetime, date, time
-import uuid
+def is_valid_csv(csv_str: str) -> bool:
+    """
+    Returns True if the CSV has at least 2 rows (header + at least one data row)
+    and at least 2 columns (in the header).
+    """
+    f = StringIO(csv_str)
+    reader = csv.reader(f)
+    rows = list(reader)
+    # Must have at least header and one data row
+    if len(rows) < 2:
+        return False
+    # Check header row for at least 2 columns
+    if len(rows[0]) < 2:
+        return False
+    return True
 
 def json_default(obj):
     if isinstance(obj, Decimal):
@@ -41,6 +56,19 @@ def json_default(obj):
     elif isinstance(obj, set):
         return list(obj)
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+def simplify_messages(messages):
+    """Simplify messages to only include a message number, role, and text content."""
+    messages_sorted = sorted(messages, key=lambda m: m.get("id", 0))
+
+    return [
+        {
+            "message_no": idx + 1,  # Using the index as a sequential message number
+            "role": msg.get("role"),
+            "text": msg.get("text_content")
+        }
+        for idx, msg in enumerate(messages_sorted)
+    ]
 
 async def update_conversation_summary_incremental(user_id: str, session_id: str, threshold: int = 8) -> str:
     from supabase_database import get_conversation_summary, get_unsummarized_messages, update_conversation_summary
@@ -63,6 +91,7 @@ async def update_conversation_summary_incremental(user_id: str, session_id: str,
         [f"{msg['role']}: {msg['text_content']}" for msg in unsummarized_messages]
     )
 
+    from agent_functions import generate_conversation_summary
     summary_result = generate_conversation_summary(new_messages_text, session.get("summary"))
 
     # Update the conversation session: set the new summary and update last_summarized_index to the current index.

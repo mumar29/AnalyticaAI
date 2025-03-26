@@ -10,7 +10,7 @@ from redis_config import get_redis_client
 from agent_functions import classify_user_input, generate_final_response, get_chart_configs, refine_query, select_relevant_documents, select_relevant_sql_tables
 from supabase_database import get_database_schema, get_filtered_schema, get_or_create_conversation_session_and_history, retrieve_all_documents, retrieve_chunks_tables, retrieve_relevant_chunks, save_conversation_messages
 from logging_config import logger
-from utils import execute_query, json_default, list_dict_to_csv, update_conversation_summary_incremental
+from utils import execute_query, json_default, list_dict_to_csv, simplify_messages, update_conversation_summary_incremental
 from websocket_manager import manager
 
 redis_client = get_redis_client()
@@ -40,10 +40,14 @@ async def route_query(state: AgentState):
     
     context = {
         "current_user_query": state["user_input"],
-        "context": {
-            "recent_messages": state["recent_messages"],
-            "conversation_summary": state["conversation_summary"]
-        }
+        "context": (
+            {"previous_messages": state["recent_messages"]}
+            if state["conversation_summary"] is None
+            else {
+                "recent_messages": state["recent_messages"],
+                "conversation_summary": state["conversation_summary"]
+            }
+        )
     }
 
     classification = classify_user_input(context)
@@ -72,28 +76,57 @@ async def process_sql(state: AgentState):
 
         context = {
             "current_user_query": state["user_input"],
-            "context": {
-                "recent_messages": state["recent_messages"],
-                "conversation_summary": state["conversation_summary"]
-            }
+            "context": (
+                {"previous_messages": state["recent_messages"]}
+                if state["conversation_summary"] is None
+                else {
+                    "recent_messages": state["recent_messages"],
+                    "conversation_summary": state["conversation_summary"]
+                }
+            )
         }
 
         tables = select_relevant_sql_tables(schema, context)
-        logger.debug("SQL queries generated: %s", tables.sql_queries)
-        
-        results = []
-        for query in tables.sql_queries:
-            try:
-                logger.debug("Executing SQL query: %s", query)
-                result = execute_query(query)
-                csv_result = list_dict_to_csv(result)
-                logger.debug("SQL query result: %s", csv_result)
-                results.append({"query": query, "data": csv_result})
-            except Exception as e:
-                logger.exception("Error executing SQL query: %s", query)
-                results.append({"query": query, "error": str(e)})
+        logger.debug("SQL queries generated for tables: %s", tables)
 
-        return {"sql_results": results}
+        results = []
+        for table in tables.tables:
+            table_result = {
+                "tables_involved": table.tables_involved,
+                "primary_data": [],
+                "supplementary_data": []
+            }
+
+            # Execute direct (primary) queries
+            for query in table.direct_queries:
+                try:
+                    logger.debug("Executing direct SQL query for tables %s: %s", table.tables_involved, query)
+                    query_result = execute_query(query)
+                    csv_result = list_dict_to_csv(query_result)
+                    logger.debug("Direct SQL query result: %s", csv_result)
+                    table_result["primary_data"].append(csv_result)
+                except Exception as e:
+                    logger.exception("Error executing direct SQL query for tables %s: %s", table.tables_involved, query)
+
+            # Execute supplementary queries
+            if table.supplementary_queries:
+                for query in table.supplementary_queries:
+                    try:
+                        logger.debug("Executing supplementary SQL query for tables %s: %s", table.tables_involved, query)
+                        query_result = execute_query(query)
+                        csv_result = list_dict_to_csv(query_result)
+                        logger.debug("Supplementary SQL query result: %s", csv_result)
+                        table_result["supplementary_data"].append(csv_result)
+                    except Exception as e:
+                        logger.exception("Error executing supplementary SQL query for tables %s: %s", table.tables_involved, query)
+
+            results.append(table_result)
+
+        print("======================================================================")
+        print("The final sql results are \n", {"sql_results": results if results else None})
+        print("======================================================================")
+
+        return {"sql_results": results if results else None}
     return {"sql_results": None}
 
 workflow.add_node("sql_processor", process_sql)
@@ -109,18 +142,24 @@ async def process_docs(state: AgentState):
 
         context = {
             "current_user_query": state["user_input"],
-            "context": {
-                "recent_messages": state["recent_messages"],
-                "conversation_summary": state["conversation_summary"]
-            }
+            "context": (
+                {"previous_messages": state["recent_messages"]}
+                if state["conversation_summary"] is None
+                else {
+                    "recent_messages": state["recent_messages"],
+                    "conversation_summary": state["conversation_summary"]
+                }
+            )
         }
 
         selected = select_relevant_documents(docs, context)
         logger.debug("Documents selected: %s", selected)
         
-        new_query = refine_query(context)
-        
-        chunk_ids_with_tables, chunks_text = await retrieve_relevant_chunks(selected.ids, new_query.final_query)
+        new_query = state["user_input"]
+        if state["conversation_summary"] is not None:
+            new_query = refine_query(context).final_query
+
+        chunk_ids_with_tables, chunks_text = await retrieve_relevant_chunks(selected.ids, new_query)
         
         chunk_tables = None  # Default to None
 
@@ -134,6 +173,10 @@ async def process_docs(state: AgentState):
             "chunks_text": chunks_text, 
             "chunk_tables": chunk_tables
         }
+
+        print("======================================================================")
+        print("The final document results are \n", {"doc_results": result})
+        print("======================================================================")
 
         return {"doc_results": result}
     return {"doc_results": None}
@@ -149,10 +192,14 @@ async def generate_response(state: AgentState):
     # Build Conversation context
     context_data = {
         "current_user_query": state["user_input"],
-        "context": {
-            "recent_messages": state["recent_messages"],
-            "conversation_summary": state["conversation_summary"]
-        }
+        "context": (
+            {"previous_messages": state["recent_messages"]}
+            if state["conversation_summary"] is None
+            else {
+                "recent_messages": state["recent_messages"],
+                "conversation_summary": state["conversation_summary"]
+            }
+        )
     }
 
     if state["needs_rag"]:
@@ -160,6 +207,11 @@ async def generate_response(state: AgentState):
             "sql_results": state.get("sql_results", []),
             "doc_results": {"chunks_text": state["doc_results"]["chunks_text"]} if state.get("doc_results") else {}
         }
+
+
+    print("======================================================================")
+    print("The final context is \n", context_data)
+    print("======================================================================")
 
     user_content = json.dumps(context_data, default=json_default, indent=2)
     logger.debug("Context for LLM: %s", user_content)
@@ -177,11 +229,17 @@ async def generate_response(state: AgentState):
 
         all_csv_list = []
 
-        # Add CSV strings from SQL results
-        if state["sql_results"]:
-            for entry in state["sql_results"]:
-                if "data" in entry and entry["data"]:
-                    all_csv_list.append(entry["data"])
+        # Process SQL results from the updated structure (sql_results is a list)
+        if state.get("sql_results"):
+            for table in state["sql_results"]:
+                # Add primary data (direct queries) CSV strings
+                for csv_str in table.get("primary_data", []):
+                    if csv_str:
+                        all_csv_list.append(csv_str)
+                # Add supplementary data CSV strings
+                for csv_str in table.get("supplementary_data", []):
+                    if csv_str:
+                        all_csv_list.append(csv_str)
 
         # Add CSV strings from document processing
         if state.get("doc_results") and state["doc_results"].get("chunk_tables"):
@@ -256,6 +314,8 @@ async def handle_query(user_input: str, user_id: int, org_id: str, user_role: st
 
     conversation_summary = session.get("summary", "")
 
+    simplified_history = simplify_messages(conversation_history)
+
     initial_state = {
         "user_id": user_id,
         "org_id": org_id,
@@ -263,7 +323,7 @@ async def handle_query(user_input: str, user_id: int, org_id: str, user_role: st
         "session_id": session_id,
         "user_input": user_input,
         "conversation_summary": conversation_summary,
-        "recent_messages": conversation_history,
+        "recent_messages": simplified_history,
     }
 
     result = await app.ainvoke(initial_state)
@@ -274,14 +334,27 @@ async def handle_query(user_input: str, user_id: int, org_id: str, user_role: st
     context_data = {
         "user_query": user_input,
         "context": {
-            "conversation_summary": conversation_summary,
-            "recent_messages": conversation_history,
-            "retrieval_results": {
-                "sql_results": result.get("sql_results", []),
-                "doc_results": {"chunks_text": result["doc_results"]["chunks_text"]} if result.get("doc_results") else {}
-            }
+            **(
+                {
+                    "previous_messages": simplified_history,
+                    "retrieval_results": {
+                        "sql_results": result.get("sql_results", []),
+                        "doc_results": {"chunks_text": result["doc_results"]["chunks_text"]} if result.get("doc_results") else {}
+                    }
+                }
+                if conversation_summary is None
+                else {
+                    "conversation_summary": conversation_summary,
+                    "recent_messages": simplified_history,
+                    "retrieval_results": {
+                        "sql_results": result.get("sql_results", []),
+                        "doc_results": {"chunks_text": result["doc_results"]["chunks_text"]} if result.get("doc_results") else {}
+                    }
+                }
+            )
         }
     }
+
     
     # Store context data in Redis as a JSON string with an expiration time (e.g., 1 hour)
     request_key = f"user:{user_id}:request:{request_id}"

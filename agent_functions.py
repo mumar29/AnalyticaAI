@@ -2,7 +2,7 @@ import json
 from typing import Any, Dict, List, Literal, Optional, Set
 from fastapi import HTTPException
 from pydantic import BaseModel, model_validator
-from utils import generate_completion
+from utils import generate_completion, is_valid_csv
 
 class IndexedCSV(BaseModel):
     csv_index: int
@@ -21,9 +21,14 @@ class Chart(BaseModel):
     type: Literal["bar", "line", "pie", "radar", "doughnut", "scatter", "bubble", "polararea"]
     mapping: Mapping
 
-class ChartConfigList(BaseModel):
-    charts: List[Chart]
+class ChartConfig(BaseModel):
+    primary_charts: List[Chart]
+    secondary_charts: Optional[List[Chart]] = []
     csv_collection: CSVCollection
+
+class ProcessDocument(BaseModel):
+    title: str
+    summary: str
 
 class Document(BaseModel):
     id: int
@@ -37,9 +42,13 @@ class Select_Docs(BaseModel):
 class Doc_Ids(BaseModel):
     ids: List[int]
 
+class TableQuery(BaseModel):
+    tables_involved: List[str]  # List of all tables used in the query.
+    direct_queries: List[str]
+    supplementary_queries: Optional[List[str]] = []  # Optional, defaulting to an empty list
+
 class TablesRetrieved(BaseModel):
-    table_names: List[str]
-    sql_queries: List[str]
+    tables: List[TableQuery]
 
 class Table(BaseModel):
     columns: Dict[str, str]
@@ -94,15 +103,6 @@ class UpdateReportRequest(BaseModel):
         if self.specificInstructions is None and not self.generalInstruction:
             raise ValueError("If 'specificInstructions' is None, 'generalInstruction' must not be empty.")
         return self
-
-def call_llm(system_prompt: str, user_content: str) -> LLMResponse:
-    try:
-        response_content = generate_completion(system_prompt, user_content, LLMResponse.model_json_schema())
-        return LLMResponse.model_validate_json(response_content)
-    
-    except Exception as e:
-        print(f"LLM call failed: {e}")
-        raise e
     
 def generate_final_response(user_content: str, needs_rag: bool, is_admin: bool) -> LLMResponse:
 
@@ -125,6 +125,30 @@ def generate_final_response(user_content: str, needs_rag: bool, is_admin: bool) 
         print(f"Failed to generate final response: {e}")
         raise e
 
+def generate_title_and_summary(chunk: str, summary_range: str = "1-2") -> ProcessDocument:
+    system_prompt = f"""You are an expert documentation analyst capable of handling diverse inputs—plain text or markdown, full documents or chunks, technical or business content. Extract a concise title and a brief summary using these rules:
+        Title:
+        - If a main heading is present (e.g., "# Getting Started"), use it exactly.
+        - Otherwise, generate a 3-5 word title without markdown formatting.
+        - Prioritize technical terms when relevant.
+
+        Summary:
+        - Provide {summary_range} clear sentences capturing key points, technical terms, and important details.
+        - Avoid markdown formatting.
+        """
+ 
+    try:
+
+        response_content = generate_completion(system_prompt, chunk, ProcessDocument.model_json_schema())
+        return ProcessDocument.model_validate_json(response_content)
+    
+    except Exception as e:
+        print(f"Error getting title and summary: {e}")
+        return {
+            "title": "Error Processing Title",
+            "summary": "Error Processing Summary"
+        }
+    
 def generate_conversation_summary(new_messages: str, existing_summary: str | None) -> LLMResponse:
     """Generates an updated conversation summary using LLM."""
 
@@ -250,35 +274,42 @@ def select_relevant_documents(documents: List[Document], context: dict) -> Doc_I
         raise e
 
 def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> TablesRetrieved:
+    
     system_prompt = f"""
-        You are an expert SQL assistant with two tasks:
-        1. Select tables relevant to answering the user query based on their columns.
-        2. Generate one or more SQL queries using ONLY those tables that:
-            - Directly satisfy the main data request from the user.
-            - Retrieve additional supporting data that offers context or deeper insights.
-            - Include supplementary queries that provide complementary details—such as aggregated views, breakdowns, or detailed listings—when they add analytical value.
-        
-        Database schema structure:
-        - JSON object with tables containing columns (name->type) and view_access.
-        - Column types may have '!' indicating required (ignore this for querying).
+        You are an advanced SQL query optimization assistant with enhanced contextual understanding.
+
+        Core Principles:
+        1. Go beyond literal user query interpretation.
+        2. Infer implicit information needs from the conversation context.
+        3. Generate comprehensive, context-rich queries that provide maximum insight.
+        4. Prioritize user experience and information depth over minimal query requirements.
+
+        Query Generation Strategy:
+        - Always include ALL relevant columns that provide meaningful context.
+        - Create queries that go beyond minimal requirements, anticipating potential follow-up questions.
+        - Prefer a single optimized query that retrieves all required data using joins and table combinations, instead of multiple smaller queries.
+
+        Additional Insights Rules:
+        - Do not include a table or query if it does not contribute additional value or context.
+
+        Database Schema Structure:
+        - You are provided with a JSON object containing tables with columns (name->type) and view_access.
+        - Note that column types may have an exclamation mark (!) indicating required fields (this can be ignored for querying).
 
         Instructions:
-        1. **Analyze the full conversation context** when selecting tables and generating queries.
-        2. **Handle implicit references** to previous queries or data.
-        3. **Strictly select tables** whose columns are needed to answer the query.
-        4. **Determine if the query is asking for multiple unrelated pieces of data.**
-            - If different pieces of information **cannot be naturally joined**, create separate queries.
-            - If all requested data is logically related (via joins), return a single optimized query.
-        5. **Write SQL that:**
-            - Uses only selected tables and their exact column names.
-            - Includes required clauses (WHERE, JOINs, etc.).
-            - Matches the query intent precisely.
-            - Handles potential NULLs if needed.
-        6. **For additional context:** 
-            - In addition to the main query, generate extra query(s) that retrieve related data that can be used for further insights.
+        1. Analyze the full conversation context, including implicit and explicit information needs.
+        2. Strictly select only those tables whose columns are essential for answering the query.
+        3. If the query involves multiple pieces of information:
+        - If the data is related, return a single optimized query that covers all required aspects using joins or table combinations.
+        - Create separate queries only if the information cannot be naturally joined.
+        4. For each optimized query, generate:
+        - **Direct queries:** One or more queries that directly answer the main request, including all implicitly required columns.
+        - **Supplementary queries:** Optional additional queries for extra insights or breakdowns, only if they add meaningful value.
+        5. In the output, for each query object, include all the table names used.
+
+        Ensure that your output is valid JSON according to the provided schema.
     """
 
-    
     try:
         context_json = json.dumps(context, indent=2)
         schema_json = json.dumps(sql_schema, indent=4)
@@ -291,6 +322,7 @@ def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> Tab
     except Exception as e:
         print(f"Error selecting relevant SQL sources: {e}")
         raise e
+
 
 def generate_kpi_sql_queries(sql_schema: Dict[str, Any]) -> KPIQueriesRetrieved:
     system_prompt = f"""
@@ -424,117 +456,112 @@ def infer_missing_headers(csv: str, max_columns: int) -> CSVHeaderCorrection:
         raise e
 
 
-def get_chart_configs(csv_list: List[str], context: dict) -> Optional[ChartConfigList]:
-    
-    # system_prompt = f"""
-    #     You are a data visualization expert. Given conversation context and a list of one or more CSV samples representing datasets, your task is as follows:
-    #     1. Thoroughly analyze each CSV sample (each CSV is assigned an index, starting from 0) to understand its context and overall structure and how it relates to the user's query or conversation history (if given).
-    #     2. Identify all potential pairs of columns and the most appropriate chart type that can create meaningful visualizations.
-    #     3. **Column Selection Criteria:**
-    #        - **Label Column (X-axis/Grouping):** 
-    #          * Typically categorical values (e.g., region, date, category)
-    #          * Must be distinct values that group/classify data
-    #          * Cannot contain duplicate values when used for grouping
-    #        - **Value Column (Y-axis/Measurement):** 
-    #          * Numerical values that represent measurements (e.g., sales, counts, percentages)
-    #          * Should be aggregatable metrics (sum, average, etc.)
-    #        - **Critical Rule:** Label and value columns MUST be different columns - never use the same column for both roles
-    #     4. Based on the user query, decide whether to generate (0-3) chart configurations:
-    #        - Generate 1 config for simple CSVs (<4 columns)
-    #        - Multiple configs only when showing different perspectives (when multiple CSVs or CSVs with many columns are available)
-    #        - No configs if CSV has 1 column only or the conversation and the provided CSVs are completely unrelated
-    #     5. For each chart configuration, include a new field called "csv_index" that indicates the index of the CSV sample (from the provided list) used to generate that configuration.
-    #     6. Provide concise, descriptive titles showing:
-    #        - Measured value
-    #        - Grouping dimension
-    #        - Time period (if relevant)
-    # """
+def get_chart_configs(csv_list: List[str], context: dict) -> Optional[ChartConfig]:
 
     system_prompt = f"""
-    You are a data visualization expert. Given conversation context and a list of one or more CSV samples (each assigned an index) representing datasets, your task is to generate VALID chart configurations by following these STRICT RULES:
+        You are a data visualization expert. Given conversation context and a list of one or more CSV samples (each assigned an index) representing datasets, your task is to generate VALID chart configurations by following these STRICT RULES:
 
-    1. CSV VALIDATION:
-        - Reject CSVs with: 
-            • Only 1 column
-            • Only 1 data row
-        - Process CSVs with:
-            • At least 1 categorical column (text/dates) 
-            • At least 1 other column (numerical or categorical)
-
-    2. COLUMN RULES (MUST FOLLOW):
-        ■ Label column (X-axis): 
-            - Categorical/text data (e.g., "Month", "Category")
-            - Unique values (no duplicates)
-        ■ Value column (Y-axis):
-            - Numerical data (e.g., "Sales", "Quantity") OR
-            - Categorical data for counts/frequencies (e.g., "Category" → count occurrences)
-            - MUST be different from label column
-
-    3. CHART CREATION:
-        • Total charts MUST be 0-3 across ALL CSVs
-        • For EACH valid and relevant CSV:
-            - Create 1-2 configurations for Simple CSVs (2-4 columns)
-            - Create 1-3 configurations for Complex  CSVs (4+ columns) only if they show unique perspectives
-            - Choose chart type based on data:
+        1. CHART CREATION:
+            • For EACH valid and relevant CSV:
+                - For **primary charts** (directly related to the user query):
+                    → Always include 1 chart configuration.
+                    → A second primary chart may be included only if the user query requires multiple direct data answers (but never more than 2 primary charts).
+                - For **secondary charts** (supplementary, supporting insights):
+                    → Include these only if they add additional value to the current conversation context.
+            • Choose chart type based on data:
                 → Trends: line/bar
                 → Comparisons: bar/pie
                 → Distributions: histogram (for numerical data)
                 → Frequencies: bar/pie (for categorical counts)
-        • Skip CSVs that don't match user request context
+            • Total chart configuartions across both primary and secondary charts must not be more than 3.
 
-    4. STRICT PROHIBITIONS:
-    ❌ Never use same column for label and value
-    ❌ Never use same label/value pair in multiple charts
-    ❌ No charts for single-column CSVs
-    ❌ No imaginary columns - use only what exists
+        2. COLUMN RULES (MUST FOLLOW):
+            ■ Label column (X-axis): 
+                - Categorical/text data (e.g., "Month", "Category")
+                - Unique values (no duplicates)
+            ■ Value column (Y-axis):
+                - Numerical data (e.g., "Sales", "Quantity") OR
+                - Categorical data for counts/frequencies (e.g., "Category" → count occurrences)
+                - MUST be different from label column                
 
-    5. Provide concise, descriptive Titles for each chart configuarion
+        3. STRICT PROHIBITIONS:
+            ❌ Never use the same column for both label and value.
+            ❌ Never use the same label/value pair in multiple charts.
+            ❌ No imaginary columns - use only what exists.
+            
+        **Important:** Skip CSVs that don't match user request context and do not contribute additional value or insight to answering the query.
+
+        5. Provide concise, descriptive titles for each chart configuration.
     """
 
     try:
+        # Preprocess CSVs: filter out invalid CSVs
+        valid_csv_entries = [(i, csv) for i, csv in enumerate(csv_list) if is_valid_csv(csv)]
+        if not valid_csv_entries:
+            return None
 
+        # Create a mapping of original index to CSV content for valid CSVs
+        valid_indices = {i for i, _ in valid_csv_entries}
+        csv_list_filtered = {i: csv for i, csv in valid_csv_entries}
+
+        # Build the CSVCollection using only valid CSVs
         csv_collection = CSVCollection(
-            csvs=[IndexedCSV(csv_index=i, content=csv) for i, csv in enumerate(csv_list)]
+            csvs=[IndexedCSV(csv_index=i, content=csv) for i, csv in csv_list_filtered.items()]
         )
         csv_json = csv_collection.model_dump_json(indent=2)
         context_json = json.dumps(context, indent=2)
         user_content = f"Context: {context_json}\n\nCSV Samples:\n{csv_json}"
 
-        response_content = generate_completion(system_prompt, user_content, ChartConfigList.model_json_schema())
+        # Generate completion based on the updated system prompt and expected JSON schema
+        response_content = generate_completion(system_prompt, user_content, ChartConfig.model_json_schema())
 
         # Validate response against the model
-        raw_config = ChartConfigList.model_validate_json(response_content)
-        
-        # Second pass: Validate and collect used indices
-        used_indices: Set[int] = set()
-        valid_charts = []
-        
-        for chart in raw_config.charts:
-            # Skip charts with invalid CSV indices
-            if not (0 <= chart.csv_index < len(csv_list)):
-                print(f"Skipping chart with invalid csv_index {chart.csv_index}")
-                continue
-                
-            # Skip charts where label_column and value_column are the same
-            if chart.mapping.label_column == chart.mapping.value_column:
-                print(f"Skipping chart with identical label and value columns: {chart.mapping.label_column}")
-                continue
-                
-            # Add to valid charts and track the used CSV index
-            used_indices.add(chart.csv_index)
-            valid_charts.append(chart)
+        raw_config = ChartConfig.model_validate_json(response_content)
 
-        if not valid_charts:
+        # Second pass: Validate and collect used indices for CSVs from both primary and secondary charts
+        used_indices: Set[int] = set()
+        valid_primary_charts = []
+        valid_secondary_charts = []
+
+        # Process primary charts
+        for chart in raw_config.primary_charts:
+            if chart.csv_index not in valid_indices:
+                print(f"Skipping primary chart with invalid csv_index {chart.csv_index}")
+                continue
+            if chart.mapping.label_column == chart.mapping.value_column:
+                print(f"Skipping primary chart with identical label and value columns: {chart.mapping.label_column}")
+                continue
+            used_indices.add(chart.csv_index)
+            valid_primary_charts.append(chart)
+
+        # Process secondary charts
+        if raw_config.secondary_charts:
+            for chart in raw_config.secondary_charts:
+                if chart.csv_index not in valid_indices:
+                    print(f"Skipping secondary chart with invalid csv_index {chart.csv_index}")
+                    continue
+                if chart.mapping.label_column == chart.mapping.value_column:
+                    print(f"Skipping secondary chart with identical label and value columns: {chart.mapping.label_column}")
+                    continue
+                used_indices.add(chart.csv_index)
+                valid_secondary_charts.append(chart)
+
+        # Ensure there is at least one valid primary chart
+        if not valid_primary_charts:
             return None
 
-        # Build minimal CSV collection
+        # Limit primary charts to 2 at maximum
+        valid_primary_charts = valid_primary_charts[:2]
+
+        # Build minimal CSV collection using only the CSV indices that were used
         minimal_csvs = [
             IndexedCSV(csv_index=i, content=csv_list[i])
-            for i in sorted(used_indices)  # Maintain original order
+            for i in sorted(used_indices)
         ]
 
-        return ChartConfigList(
-            charts=valid_charts,
+        return ChartConfig(
+            primary_charts=valid_primary_charts,
+            secondary_charts=valid_secondary_charts,
             csv_collection=CSVCollection(csvs=minimal_csvs)
         )
 

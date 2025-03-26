@@ -1,4 +1,5 @@
 # graph_main.py
+import env_config
 import asyncio
 from contextlib import asynccontextmanager
 import json
@@ -9,11 +10,12 @@ import aiofiles
 import uvicorn
 from typing import Dict, List, Literal, Optional
 from fastapi import FastAPI, APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ValidationError
 from llama_parse import LlamaParse
 from llama_index.core import SimpleDirectoryReader
-from agent_functions import ChartConfigList, PerformanceReport, Report, UpdateReportRequest, generate_kpi_sql_queries, generate_performance_report, generate_structured_report, update_strutured_report
+from agent_functions import ChartConfig, PerformanceReport, Report, UpdateReportRequest, generate_kpi_sql_queries, generate_performance_report, generate_structured_report, update_strutured_report
 from auth import User, create_access_token, get_current_user, get_password_hash, verify_password
 from chunk_md import process_document
 from context_storage import CURRENT_ORG_ID
@@ -28,9 +30,6 @@ from supabase_provider import SupabaseProvider
 from utils import execute_query, json_default, save_credentials_to_env
 from websocket_manager import manager
 from redis_config import get_redis_client
-from dotenv import load_dotenv
-
-load_dotenv()
 
 redis_client = get_redis_client()
 
@@ -80,6 +79,19 @@ app = FastAPI(
     # lifespan=lifespan
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # Allow frontend requests
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],  # Allowed HTTP methods
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "Access-Control-Allow-Headers",
+        "Access-Control-Allow-Origin"
+    ],  # Allowed headers
+)
+
 # Security
 api_key_header = APIKeyHeader(name="X-API-Key")
 
@@ -104,7 +116,7 @@ class QueryResponse(BaseModel):
     session_id: str
     request_id: str
     text_response: str
-    chart_configs: Optional[ChartConfigList] = None
+    chart_configs: Optional[ChartConfig] = None
     sources: List[str]
     latency_ms: float
 
@@ -185,7 +197,7 @@ async def register_organization_endpoint(org_data: OrganizationCreate):
 
     org_id = await register_organization(
         org_data.name,
-        org_data.admin_email,
+        org_data.admin_email.lower(),
         hashed_pw
     )
     return {"organization_id": org_id}
@@ -193,7 +205,7 @@ async def register_organization_endpoint(org_data: OrganizationCreate):
 @router.post("/login", response_model=TokenResponse)
 async def login_endpoint(login_data: LoginRequest):
     # Get user from database
-    user = await get_user(login_data.email)
+    user = await get_user(login_data.email.lower())
     
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -224,7 +236,7 @@ async def create_user_endpoint(
         raise HTTPException(403, "Admin privileges required")
     
     hashed_pw = get_password_hash(user_data.password)
-    user = await create_user(current_user.organization_id, user_data.email, hashed_pw, user_data.role)
+    user = await create_user(current_user.organization_id, user_data.email.lower(), hashed_pw, user_data.role)
     
     return {"user_id": user[0]["id"]}
 

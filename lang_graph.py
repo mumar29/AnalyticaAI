@@ -379,7 +379,7 @@ async def handle_query(user_input: str, user_id: int, org_id: str, user_role: st
 
     await save_conversation_messages(messages)
 
-    asyncio.create_task(update_conversation_summary_incremental(user_id, session_id))
+    asyncio.create_task(update_conversation_summary_incremental(user_id, session_id, messages))
 
     final_response = {
         "request_id": request_id,

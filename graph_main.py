@@ -5,17 +5,18 @@ from contextlib import asynccontextmanager
 import json
 import time
 import os
+import pdfkit
 from urllib.parse import urlparse
 import aiofiles
 import uvicorn
 from typing import Dict, List, Literal, Optional
-from fastapi import FastAPI, APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ValidationError
 from llama_parse import LlamaParse
 from llama_index.core import SimpleDirectoryReader
-from agent_functions import ChartConfig, PerformanceReport, Report, UpdateReportRequest, generate_kpi_sql_queries, generate_performance_report, generate_structured_report, update_strutured_report
+from agent_functions import ChartConfig, PerformanceReport, Report, UpdateReportRequest, generate_kpi_sql_queries, generate_performance_report, generate_structured_report, get_chart_configs, update_strutured_report
 from auth import User, create_access_token, get_current_user, get_password_hash, verify_password
 from chunk_md import process_document
 from context_storage import CURRENT_ORG_ID
@@ -27,7 +28,7 @@ from logging_config import logger
 from models import DatabaseConnection
 from supabase_database import create_user, fetch_sql_db_credentials, get_user, register_organization, set_llm_api_key, fetch_llm_api_key, get_conversation_messages, get_database_schema, get_user_conversations, set_sql_db_credentials, update_control_table_access, update_document_access
 from supabase_provider import SupabaseProvider
-from utils import execute_query, json_default, save_credentials_to_env
+from utils import execute_query, json_default, list_dict_to_csv, save_credentials_to_env
 from websocket_manager import manager
 from redis_config import get_redis_client
 
@@ -81,7 +82,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Allow frontend requests
+    allow_origins=["*"],  # Allows requests from any origin
     allow_credentials=True,
     allow_methods=["GET", "POST"],  # Allowed HTTP methods
     allow_headers=[
@@ -119,6 +120,10 @@ class QueryResponse(BaseModel):
     chart_configs: Optional[ChartConfig] = None
     sources: List[str]
     latency_ms: float
+
+class PerformanceReportResponse(BaseModel):
+    text_response: str
+    chart_configs: Optional[ChartConfig] = None
 
 class ReportRequest(BaseModel):
     request_id: str
@@ -392,46 +397,130 @@ async def get_conversation_endpoint(
         logger.error(f"Error retrieving conversation: {str(e)}")
         raise HTTPException(status_code=500, detail="Error retrieving conversation")
 
-@router.get("/get-company-health", response_model=PerformanceReport)
+# @router.get("/get-company-health", response_model=PerformanceReport)
+# async def get_company_health_endpoint(
+#     db_check: None = Depends(ensure_db_initialized),
+#     llm_check: None = Depends(ensure_llm_initialized)
+# ):
+#     """
+#     Retrieves the SQL schema using get_database_schema,
+#     then generates KPI-related SQL queries from the schema.
+#     """
+#     try:
+#         # Retrieve the schema from your database
+#         schema = await get_database_schema()
+#         # If the returned schema has a "tables" key, use that; otherwise, assume it's a flat dict.
+#         tables = schema.get("tables", schema)
+        
+#         # Generate KPI SQL queries using the provided schema tables
+#         kpi_queries = generate_kpi_sql_queries(tables)
+
+#         results = []
+#         for query in kpi_queries.sql_queries:
+#             try:
+#                 logger.debug("Executing SQL query: %s", query)
+#                 result = execute_query(query)
+#                 logger.debug("SQL query result: %s", result)
+#                 results.append({"query": query, "data": result})
+#             except Exception as e:
+#                 logger.exception("Error executing SQL query: %s", query)
+#                 results.append({"query": query, "error": str(e)})
+        
+#         context = []
+#         context.append("SQL Results:\n" + json.dumps(results, default=json_default, indent=2))
+
+#         report = generate_performance_report(context)
+
+#         return report
+    
+#     except Exception as e:
+#         logger.error(f"Health Retrieval failed: {str(e)}")
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/get-company-health", response_model=PerformanceReportResponse)
 async def get_company_health_endpoint(
     db_check: None = Depends(ensure_db_initialized),
-    llm_check: None = Depends(ensure_llm_initialized)
+    llm_check: None = Depends(ensure_llm_initialized),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Retrieves the SQL schema using get_database_schema,
     then generates KPI-related SQL queries from the schema.
+    Executes each query, converts the results to CSV,
+    and uses those CSVs to generate chart configurations.
+    Finally, a performance report is generated with both
+    text and chart configurations.
     """
     try:
         # Retrieve the schema from your database
+        request_key = f"organization:{current_user.organization_id}:request:health"
+        
+        # Check if we already have a cached response
+        cached_response = redis_client.get(request_key)
+        if cached_response:
+            # If a cached response exists, load and return it
+            cached_data = json.loads(cached_response)
+            return PerformanceReportResponse(**cached_data)
+
         schema = await get_database_schema()
-        # If the returned schema has a "tables" key, use that; otherwise, assume it's a flat dict.
         tables = schema.get("tables", schema)
         
         # Generate KPI SQL queries using the provided schema tables
         kpi_queries = generate_kpi_sql_queries(tables)
 
         results = []
+        csv_list = []
         for query in kpi_queries.sql_queries:
             try:
                 logger.debug("Executing SQL query: %s", query)
-                result = execute_query(query)
-                logger.debug("SQL query result: %s", result)
-                results.append({"query": query, "data": result})
+                query_result = execute_query(query)
+                csv_result = list_dict_to_csv(query_result)
+                logger.debug("SQL query result (CSV): %s", csv_result)
+                results.append({
+                    "tables_involved": kpi_queries.tables_involved,  # include table names here
+                    "data": csv_result
+                })
+                if csv_result:
+                    csv_list.append(csv_result)
             except Exception as e:
                 logger.exception("Error executing SQL query: %s", query)
-                results.append({"query": query, "error": str(e)})
+                results.append({
+                    "tables_involved": kpi_queries.tables_involved,  # include table names here
+                    "error": str(e)
+                })
+
+        # Prepare context with SQL results for generating the report
+        context = "SQL Results:\n" + json.dumps(results, default=json_default, indent=2)
         
-        context = []
-        context.append("SQL Results:\n" + json.dumps(results, default=json_default, indent=2))
+        # Generate chart configurations using the collected CSV results
+        chart_configs = None
+        if csv_list:
+            # Create a minimal context similar to previous implementation
+            context_data = {
+                "current_user_query": "Get Important company health metrics and performance data",
+                "context": {
+                    "sql_results": results
+                }
+            }
+            chart_configs = get_chart_configs(csv_list, context_data)
+            logger.debug("Chart configurations generated: %s", chart_configs)
 
-        report = generate_performance_report(context)
+        # Generate the performance report, including chart configurations if available.
+        text_report = generate_performance_report(context)
 
-        return report
+        response = PerformanceReportResponse(
+            text_response=text_report.report,
+            chart_configs=chart_configs
+        )
+
+        redis_client.set(request_key, json.dumps(response.dict()), ex=86400)
+        
+        return response
     
     except Exception as e:
         logger.error(f"Health Retrieval failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/generate-report/{request_id}", response_model=Report)
 async def generate_report_endpoint(
@@ -471,6 +560,17 @@ async def update_strutured_report_endpoint(
     except Exception as e:
         print(f"Error updating report: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update report: {str(e)}")
+
+@router.post("/get_pdf_report")
+async def generate_pdf_report_endpoint(
+    html_report: Report,
+    current_user: User = Depends(get_current_user),
+):
+    html_content = html_report.html
+    # Generate PDF in-memory (the second parameter is False to return PDF as a byte string)
+    pdf = pdfkit.from_string(html_content, False)
+    # Return the PDF with the appropriate media type
+    return Response(content=pdf, media_type="application/pdf")
 
 PDF_UPLOAD_FOLDER = "pdfs"
 GENERATED_MARKDOWN_FOLDER = "markdowns"
@@ -617,7 +717,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
         "graph_main:app",
-        host="0.0.0.0",
+        host="192.168.0.101",
         port=port,
         log_config=None,  # Disable default uvicorn logs
         reload=False  # Disable reload on Windows

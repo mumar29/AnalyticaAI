@@ -478,6 +478,27 @@ async def get_conversation_session(user_id, conversation_id):
         print(f"Error retrieving conversation summary: {e}")
         return None
 
+async def update_conversation_title(user_id: str, conversation_id: str, title: str):
+    """Update the title of a conversation for a given user."""
+    try:   
+        supabase = SupabaseProvider.get_client()
+
+        # If no existing conversation, create a new one
+        response = supabase.table("conversations") \
+            .update({"title": title}) \
+            .eq("user_id", user_id) \
+            .eq("id", conversation_id) \
+            .execute()  
+
+        if not response.data:
+            return None
+
+        return response.data
+
+    except Exception as e:
+        print(f"Error updating conversation title: {e}")
+        return None 
+
 async def update_conversation_summary(user_id: str, conversation_id: str, updated_summary: str, last_summarized_index):
     """Update the summary of a conversation for a given user."""
     try:   
@@ -543,7 +564,7 @@ async def get_user_conversations(user_id: str) -> List[dict] | None:
         print(f"Error retrieving conversations: {e}")
         return None
 
-async def get_conversation_messages(user_id: int, conversation_id, limit: Optional[int] = None)-> List[ConversationMessage] | None:
+async def get_conversation_messages(user_id: int, conversation_id, limit: Optional[int] = None)-> list | None:
     try: 
         supabase = SupabaseProvider.get_client()
 

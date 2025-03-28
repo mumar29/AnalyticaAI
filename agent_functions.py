@@ -26,6 +26,9 @@ class ChartConfig(BaseModel):
     secondary_charts: Optional[List[Chart]] = []
     csv_collection: CSVCollection
 
+class ProcessConv(BaseModel):
+    title: str
+
 class ProcessDocument(BaseModel):
     title: str
     summary: str
@@ -72,6 +75,7 @@ class RefineQueryResponse(BaseModel):
     final_query: str
 
 class KPIQueriesRetrieved(BaseModel):
+    tables_involved: List[str]
     sql_queries: List[str]
 
 class PerformanceReport(BaseModel):
@@ -103,7 +107,7 @@ class UpdateReportRequest(BaseModel):
         if self.specificInstructions is None and not self.generalInstruction:
             raise ValueError("If 'specificInstructions' is None, 'generalInstruction' must not be empty.")
         return self
-    
+
 def generate_final_response(user_content: str, needs_rag: bool, is_admin: bool) -> LLMResponse:
 
     if needs_rag:
@@ -148,7 +152,22 @@ def generate_title_and_summary(chunk: str, summary_range: str = "1-2") -> Proces
             "title": "Error Processing Title",
             "summary": "Error Processing Summary"
         }
+
+def generate_conversation_title(messages: list) -> ProcessConv:
+    system_prompt = f"""You are conversation title generator, given the first two messages of a conversation session, your task is to generate a suitable title for the conversation
+        """
+ 
+    try:
+        context_json = json.dumps(messages, indent=2)
+        response_content = generate_completion(system_prompt, context_json, ProcessConv.model_json_schema())
+        return ProcessConv.model_validate_json(response_content)
     
+    except Exception as e:
+        print(f"Error getting conversation title: {e}")
+        return {
+            "title": "Conversation",
+        }
+
 def generate_conversation_summary(new_messages: str, existing_summary: str | None) -> LLMResponse:
     """Generates an updated conversation summary using LLM."""
 

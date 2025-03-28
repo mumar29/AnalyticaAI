@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS conversations (
     id BIGSERIAL PRIMARY KEY,
     user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT,
     summary TEXT,
     total_messages INTEGER DEFAULT 0,
     last_summarized_message_count INTEGER DEFAULT 0,
@@ -168,7 +169,7 @@ BEGIN
         SELECT m.*
         FROM messages m
         WHERE m.conversation_id = conv.id
-        ORDER BY m.created_at DESC
+        ORDER BY m.id ASC
         LIMIT p_history_limit
     ) sub;
 

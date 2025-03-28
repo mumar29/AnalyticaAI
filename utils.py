@@ -1,6 +1,7 @@
 import csv
 import io
 import os
+import uuid
 import psycopg2
 from typing import List, Dict, Optional
 from context_storage import CURRENT_ORG_ID
@@ -8,8 +9,8 @@ from database_provider import DatabaseProvider
 from llm_provider import LLMProvider
 from decimal import Decimal
 from datetime import datetime, date, time
-import uuid
 from io import StringIO
+
 
 def list_dict_to_csv(data: List[Dict]) -> str:
     if not data:
@@ -70,19 +71,26 @@ def simplify_messages(messages):
         for idx, msg in enumerate(messages_sorted)
     ]
 
-async def update_conversation_summary_incremental(user_id: str, session_id: str, threshold: int = 8) -> str:
-    from supabase_database import get_conversation_summary, get_unsummarized_messages, update_conversation_summary
+async def update_conversation_summary_incremental(user_id: str, session_id: str, messages: list, threshold: int = 8) -> str:
+    from supabase_database import get_conversation_summary, get_unsummarized_messages, update_conversation_title, update_conversation_summary
 
     # Retrieve the conversation session details including summary, last_summarized_index, and current_message_index.
     session = await get_conversation_summary(user_id, session_id)
+    title = session.get("title", "")
+    summary = session.get("summary", "")
     last_index = session.get("last_summarized_message_count", 0)
     current_index = session.get("total_messages", 0)
+
+    from agent_functions import generate_conversation_title, generate_conversation_summary
+    if not title:
+        conversation_title = generate_conversation_title(messages)
+        await update_conversation_title(user_id, session_id,conversation_title.title)
 
     # Calculate the number of new (unsummarized) messages.
     unsummarized_count = current_index - last_index
     if unsummarized_count < threshold:
         # Not enough new messages; no need to update the summary.
-        return session.get("summary", "")
+        return summary
 
     # Fetch only the unsummarized messages using their message index.
     unsummarized_messages = await get_unsummarized_messages(session_id, last_index)
@@ -91,13 +99,13 @@ async def update_conversation_summary_incremental(user_id: str, session_id: str,
         [f"{msg['role']}: {msg['text_content']}" for msg in unsummarized_messages]
     )
 
-    from agent_functions import generate_conversation_summary
-    summary_result = generate_conversation_summary(new_messages_text, session.get("summary"))
+    summary_result = generate_conversation_summary(new_messages_text, summary)
 
     # Update the conversation session: set the new summary and update last_summarized_index to the current index.
     await update_conversation_summary(user_id, session_id, summary_result.content, current_index)
 
     return summary_result.content
+
 
 def save_credentials_to_env(url, key):
     # Read the existing .env file

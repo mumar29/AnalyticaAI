@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     id bigserial PRIMARY KEY,
     organization_id BIGINT UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
     provider text NOT NULL,
-    api_key text NOT NULL,
+    host TEXT
+    api_key text,
     created_at timestamp default now()
 );
 

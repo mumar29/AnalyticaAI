@@ -9,7 +9,7 @@ from models import DatabaseConnection, ProcessedChunk
 from supabase_provider import SupabaseProvider
 from utils import execute_query
 
-ALLOWED_LLM_PROVIDERS = {"GROQ", "GEMINI"}
+ALLOWED_LLM_PROVIDERS = {"GROQ", "GEMINI", "OLLAMA"}
 ALLOWED_DB_PROVIDERS = {"postgresql", "mysql", "sqlserver", "supabase"}
 
 # from supabase import create_client
@@ -73,6 +73,7 @@ async def set_llm_api_key(org_id: str, llm_credentials: LLMConnection) -> Dict[s
                 "organization_id": org_id,
                 "provider": llm_credentials.provider,
                 "api_key": llm_credentials.api_key,
+                "host": llm_credentials.host,
             }, on_conflict=["organization_id"])
             .execute()
         )

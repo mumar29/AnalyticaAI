@@ -4,10 +4,12 @@ from typing import Dict, Optional, Any, Tuple, Literal
 from pydantic import BaseModel, Field
 
 class LLMConnection(BaseModel):
-    provider: Literal["GEMINI", "GROQ"]
-    api_key: str
+    provider: Literal["GEMINI", "GROQ", "OLLAMA"]
+    api_key: Optional[str] = Field(default=None, description="Online LLM host")
+    host: Optional[str] = Field(default=None, description="Local LLM host")
     gemini_model: str = Field(default="gemini-2.0-flash", description="Default model for Gemini")
     groq_model: str = Field(default="llama-3.3-70b-versatile", description="Default model for Groq")
+    ollama_model: str = Field(default="gemma3:1b", description="Default model for Ollama")
 
 class LLMProvider:
     """
@@ -63,6 +65,10 @@ class LLMProvider:
                 from groq import Groq
                 new_connection = Groq(api_key=config.api_key)
                 cls._test_connection(new_connection, "GROQ")
+            elif config.provider == "OLLAMA":
+                from ollama import Client
+                new_connection = Client(host=config.host)
+                cls._test_connection(new_connection, "OLLAMA")
             else:
                 raise ValueError(f"Unsupported provider: {config.provider}")
 
@@ -99,11 +105,11 @@ class LLMProvider:
             if config.provider == "GROQ":
                 system_prompt_with_schema = f"""{system_prompt}\nReturn your answer as a JSON object following this schema:\n{json.dumps(response_schema, indent=2)}"""
                 chat_completion = client.chat.completions.create(
+                    model=config.groq_model,
                     messages=[
                         {"role": "system", "content": system_prompt_with_schema},
                         {"role": "user", "content": user_content}
                     ],
-                    model=config.groq_model,
                     response_format={"type": "json_object"}
                 )
                 return chat_completion.choices[0].message.content
@@ -121,6 +127,16 @@ class LLMProvider:
                 )
                 return chat_completion.text
 
+            elif config.provider == "OLLAMA":
+                chat_completion = client.chat(
+                    model=config.ollama_model, 
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content}
+                    ],
+                    format=response_schema
+                )
+                return chat_completion.message.content
         except Exception as e:
             raise RuntimeError(f"LLM query execution failed: {str(e)}") from e
 
@@ -167,9 +183,17 @@ class LLMProvider:
             elif provider == "GROQ":
                 # Simple test with minimal tokens.
                 client.chat.completions.create(
-                    messages=[{"role": "user", "content": "Hello"}],
                     model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": "Hello"}],
                     max_tokens=1
                 )
+            elif provider == "OLLAMA":
+                # Simple test with minimal tokens.
+                client.chat(
+                    model='gemma3:1b', 
+                    messages=[{'role': 'user', 'content': 'Hello'}],
+                    options = {"num_predict": 1}
+                )
+
         except Exception as e:
             raise ConnectionError(f"LLM connection test failed: {str(e)}") from e

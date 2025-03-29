@@ -720,7 +720,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
         "graph_main:app",
-        host="192.168.0.101",
+        host="0.0.0.0",
         port=port,
         log_config=None,  # Disable default uvicorn logs
         reload=False  # Disable reload on Windows

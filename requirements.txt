@@ -8,6 +8,7 @@ supabase
 streamlit
 pydantic_ai
 langchain
+langgraph
 keybert
 tiktoken
 torch
@@ -21,5 +22,6 @@ redis
 psycopg2
 pyodbc
 pymysql
+pdfkit
 uvicorn
 gunicorn

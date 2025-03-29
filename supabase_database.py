@@ -656,7 +656,7 @@ async def get_unsummarized_messages(conversation_id: str, last_index: int):
         print(f"Error retrieving unsummarized messages: {e}")
         return None
 
-async def register_organization(org_name: str, admin_email: str, admin_password: str):
+async def register_organization(org_name: str, admin_name: str, admin_email: str, admin_password: str):
     try:
         supabase = SupabaseProvider.get_client()
 
@@ -664,6 +664,7 @@ async def register_organization(org_name: str, admin_email: str, admin_password:
             "create_organization_admin",
             {
                 "org_name": org_name,
+                "admin_name": admin_name,
                 "admin_email": admin_email,
                 "hashed_pw": admin_password
             }
@@ -697,12 +698,13 @@ async def get_user(user_email: str):
         print(f"Error retrieving user details: {e}")
         return None
     
-async def create_user(org_id: int, user_email: str, user_password: str, user_role: str):
+async def create_user(org_id: int, user_name: str, user_email: str, user_password: str, user_role: str):
     try:
         supabase = SupabaseProvider.get_client()
 
         response = supabase.table("users") \
             .insert({
+                "user_name": user_name,
                 "email": user_email,
                 "hashed_password": user_password,
                 "organization_id": org_id,

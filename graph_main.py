@@ -149,14 +149,16 @@ class DatabaseSetup(BaseModel):
     key: str
 
 class OrganizationCreate(BaseModel):
-    name: str
+    org_name: str
+    admin_name: str
     admin_email: str
     admin_password: str
 
 class UserCreate(BaseModel):
+    name: str
     email: str
     password: str
-    role: str = "member"
+    role: Literal["admin", "manager", "member"] = "member"
 
 class LoginRequest(BaseModel):
     email: str
@@ -201,7 +203,8 @@ async def register_organization_endpoint(org_data: OrganizationCreate):
     hashed_pw = get_password_hash(org_data.admin_password)
 
     org_id = await register_organization(
-        org_data.name,
+        org_data.org_name,
+        org_data.admin_name,
         org_data.admin_email.lower(),
         hashed_pw
     )
@@ -241,7 +244,7 @@ async def create_user_endpoint(
         raise HTTPException(403, "Admin privileges required")
     
     hashed_pw = get_password_hash(user_data.password)
-    user = await create_user(current_user.organization_id, user_data.email.lower(), hashed_pw, user_data.role)
+    user = await create_user(current_user.organization_id, user_data.name, user_data.email.lower(), hashed_pw, user_data.role)
     
     return {"user_id": user[0]["id"]}
 

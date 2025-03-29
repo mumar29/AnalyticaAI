@@ -10,9 +10,10 @@ CREATE TABLE IF NOT EXISTS organizations (
 CREATE TABLE IF NOT EXISTS users (
     id BIGSERIAL PRIMARY KEY,
     organization_id BIGINT REFERENCES organizations(id) ON DELETE CASCADE,
+    user_name VARCHAR NOT NULL,
     email TEXT UNIQUE NOT NULL,
     hashed_password TEXT NOT NULL,
-    role varchar CHECK (role IN ('admin', 'member')) NOT NULL,
+    role VARCHAR CHECK (role IN ('admin', 'member')) NOT NULL,
     created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -124,6 +125,7 @@ $$ LANGUAGE plpgsql;
 -- Helper function to create organization admins
 CREATE OR REPLACE FUNCTION create_organization_admin(
     org_name TEXT,
+    admin_name VARCHAR,
     admin_email TEXT,
     hashed_pw TEXT
 ) RETURNS BIGINT AS $$
@@ -135,8 +137,8 @@ BEGIN
     RETURNING id INTO org_id;
 
     -- Create admin user
-    INSERT INTO users(email, hashed_password, organization_id, role)
-    VALUES (admin_email, hashed_pw, org_id, 'admin');
+    INSERT INTO users(email, user_name, hashed_password, organization_id, role)
+    VALUES (admin_email, admin_name, hashed_pw, org_id, 'admin');
 
     RETURN org_id;
 END;

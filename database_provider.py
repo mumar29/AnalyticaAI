@@ -24,7 +24,7 @@ class DatabaseProvider:
         if org_id in cls._connections:
             return cls._connections[org_id][1]
 
-        from supabase_database import fetch_sql_db_credentials
+        from database_functions import fetch_sql_db_credentials
         # Fetch configuration as a dict
         raw_config = fetch_sql_db_credentials(org_id)
         if not raw_config:

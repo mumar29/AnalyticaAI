@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     id bigserial PRIMARY KEY,
     organization_id BIGINT UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
     provider text NOT NULL,
-    host TEXT
+    host TEXT,
     api_key text,
     created_at timestamp default now()
 );
@@ -259,7 +259,6 @@ $$;
 CREATE OR REPLACE FUNCTION match_md_chunks (
   query_embedding vector(1024),
   match_count int DEFAULT 10,
-  filter jsonb DEFAULT '{}',
   p_document_ids bigint[] DEFAULT NULL  -- Array of document IDs
 ) RETURNS TABLE (
   chunk_id bigint,
@@ -285,8 +284,7 @@ BEGIN
     c.metadata,
     1 - (c.embedding <=> query_embedding) AS similarity
   FROM md_chunks c
-  WHERE c.metadata @> filter
-    AND (p_document_ids IS NULL OR c.document_id = ANY(p_document_ids))  -- Updated filter for multiple IDs
+  WHERE (p_document_ids IS NULL OR c.document_id = ANY(p_document_ids))  -- Only keep document IDs filter
   ORDER BY c.embedding <=> query_embedding
   LIMIT match_count;
 END;

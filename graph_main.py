@@ -1,5 +1,6 @@
 # graph_main.py
 import env_config
+from db_service import DatabaseService
 import asyncio
 from contextlib import asynccontextmanager
 import json
@@ -26,9 +27,9 @@ from lang_graph import handle_query
 from llm_provider import LLMConnection, LLMProvider
 from logging_config import logger
 from models import DatabaseConnection
-from supabase_database import create_user, fetch_sql_db_credentials, get_user, register_organization, set_llm_api_key, fetch_llm_api_key, get_conversation_messages, get_database_schema, get_user_conversations, set_sql_db_credentials, update_control_table_access, update_document_access
-from supabase_provider import SupabaseProvider
-from utils import execute_query, json_default, list_dict_to_csv, save_credentials_to_env
+from database_functions import create_user, fetch_sql_db_credentials, get_user, register_organization, set_llm_api_key, fetch_llm_api_key, get_conversation_messages, get_database_schema, get_user_conversations, set_sql_db_credentials, update_control_table_access, update_document_access
+from main_supabase_provider import MainSupabaseProvider
+from utils import execute_query, get_website_identifier, json_default, list_dict_to_csv, save_credentials_to_env
 from websocket_manager import manager
 from redis_config import get_redis_client
 
@@ -55,21 +56,45 @@ async def ensure_llm_initialized(current_user: User = Depends(get_current_user))
             detail=f"Failed to initialize LLM connection for org {current_user.organization_id}: {str(e)}"
         )
 
-# @asynccontextmanager
-# async def lifespan(app: FastAPI):
-#     """Lifespan event to fetch API key once on startup."""
-#     request = fetch_sql_db_credentials()
-#     if request:
-#         request_data = DatabaseConnection(**request)
-#         DatabaseProvider.initialize(request_data)
+def initialize_database():
+    # Get database configuration from environment variables or config file
+    db_type = os.getenv("DB_TYPE", "postgres")  # or "supabase"
+    
+    if db_type.lower() == "postgres" or db_type.lower() == "postgresql":
+        config = {
+            "host": os.getenv("DB_HOST", "localhost"),
+            "port": os.getenv("DB_PORT", 5432),
+            "dbname": os.getenv("DB_NAME", "AnalyticaAI"),
+            "user": os.getenv("DB_USER", "postgres"),
+            "password": os.getenv("DB_PASSWORD", "123456")
+        }
+    elif db_type.lower() == "supabase":
+        config = {
+            "url": os.getenv("SUPABASE_URL"),
+            "key": os.getenv("SUPABASE_KEY")
+        }
+    else:
+        raise ValueError(f"Unsupported database type: {db_type}")
+    
+    # Initialize the database service with the appropriate provider
+    DatabaseService.initialize(db_type, config)
 
-#     credentials = fetch_llm_api_key()  # Fetch and store the API key on startup
-#     print("Fetched credentials:", credentials)  # Debugging line
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    initialize_database()
+    # """Lifespan event to fetch API key once on startup."""
+    # request = fetch_sql_db_credentials()
+    # if request:
+    #     request_data = DatabaseConnection(**request)
+    #     DatabaseProvider.initialize(request_data)
 
-#     if credentials:
-#         request_data = LLMConnection(provider=credentials["provider"], api_key=credentials["api_key"])
-#         LLMProvider.initialize(request_data)
-#     yield  # Let FastAPI run
+    # credentials = fetch_llm_api_key()  # Fetch and store the API key on startup
+    # print("Fetched credentials:", credentials)  # Debugging line
+
+    # if credentials:
+    #     request_data = LLMConnection(provider=credentials["provider"], api_key=credentials["api_key"])
+    #     LLMProvider.initialize(request_data)
+    yield  # Let FastAPI run
 
 app = FastAPI(
     title="RAG Agent API",
@@ -77,7 +102,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
-    # lifespan=lifespan
+    lifespan=lifespan
 )
 
 app.add_middleware(
@@ -139,7 +164,8 @@ class KPIQueriesRetrieved(BaseModel):
 
 class UrlsRequest(BaseModel):
     urls: List[str]
-
+    headless: Optional[bool] = None
+    
 class LLMKeyRequest(BaseModel):
     provider: str
     key: str
@@ -246,7 +272,13 @@ async def create_user_endpoint(
     hashed_pw = get_password_hash(user_data.password)
     user = await create_user(current_user.organization_id, user_data.name, user_data.email.lower(), hashed_pw, user_data.role)
     
-    return {"user_id": user[0]["id"]}
+    return {
+        "status": "success",
+        "message": f"User created successfully",
+        "user_id": user["id"]
+    }
+    
+    # return {"user_id": user[0]["id"]}
 
 @router.post("/set-sql-database")
 async def set_sql_database(
@@ -292,7 +324,7 @@ def setup_main_database(
     os.environ["SUPABASE_KEY"] = request.key
 
     # Reset and reinitialize Supabase client
-    SupabaseProvider.reset_client()
+    MainSupabaseProvider.reset_client()
 
     return {
         "status": "success",
@@ -640,24 +672,28 @@ async def process_website_endpoint(
         if not request.urls:
             raise HTTPException(status_code=400, detail="No URLs provided.")
         
-        results = await crawl_website(request.urls)
+        headless = request.headless if request.headless is not None else False
+
+        results = await crawl_website(request.urls, headless)
 
         # Filter and gather successful results
-        successful_results = [(result.url, result.markdown) for result in results if result.success]
+        successful_results = [(result.url, result.markdown.fit_markdown) for result in results if result.success]
         if not successful_results:
             raise HTTPException(status_code=500, detail="Failed to crawl any URLs.")
         
         urls, markdowns = zip(*successful_results)
-        main_url = urlparse(urls[0]).netloc
+        
+        main_identifier = get_website_identifier(urls[0])
         
         # Process the collected markdowns as a batch
-        await process_document(list(markdowns), main_url, "webpage", current_user.organization_id)
+        await process_document(list(markdowns), main_identifier, "webpage", current_user.organization_id)
         
         return {
             "message": "Crawling and processing completed",
-            "base_url": main_url,
+            "base_url": main_identifier,
             "processed_urls": urls
         }
+        
     except Exception as e:
         raise HTTPException(
             status_code=500,

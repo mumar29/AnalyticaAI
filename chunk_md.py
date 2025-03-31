@@ -9,7 +9,7 @@ from agent_functions import generate_title_and_summary
 from mdTocsv import get_md_tables
 
 from models import ProcessedChunk
-from supabase_database import create_document_record, finalize_document, store_chunk
+from database_functions import create_document_record, finalize_document, store_chunk
 
 def parse_markdown_hierarchy(md_content: str) -> List[str]:
     """Improved parsing with hierarchy awareness"""
@@ -212,6 +212,9 @@ async def process_document(content: Union[str, List[str]], path: str, source_typ
             chunks = chunk_markdownv2(page_markdown, chunk_size=2000)
             for i, chunk in enumerate(chunks):
                 chunk_object = process_chunk(chunk, i + 1, document_id)
+                print("======================================================================")
+                print("store_chunk function called")
+                print("======================================================================")
                 store_chunk(chunk_object)
                 chunk_summaries.append(chunk_object.summary)
     else:
@@ -219,6 +222,9 @@ async def process_document(content: Union[str, List[str]], path: str, source_typ
         chunks = chunk_markdownv2(content, chunk_size=2000)
         for i, chunk in enumerate(chunks):
             chunk_object = process_chunk(chunk, i + 1, document_id)
+            print("======================================================================")
+            print("store_chunk function called")
+            print("======================================================================")
             store_chunk(chunk_object)
             chunk_summaries.append(chunk_object.summary)
     

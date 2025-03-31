@@ -1,5 +1,5 @@
 import asyncio
-from supabase_database import retrieve_chunks_tables
+from database_functions import retrieve_chunks_tables
 
 
 async def main():

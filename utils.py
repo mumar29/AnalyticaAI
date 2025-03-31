@@ -1,6 +1,7 @@
 import csv
 import io
 import os
+from urllib.parse import urlparse
 import uuid
 import psycopg2
 from typing import List, Dict, Optional
@@ -71,8 +72,151 @@ def simplify_messages(messages):
         for idx, msg in enumerate(messages_sorted)
     ]
 
+MULTI_USER_DOMAINS = {
+    "github.com",
+    "medium.com", 
+    "dev.to",
+    "substack.com",
+    "notion.site",
+    "hashnode.dev",
+    "gitlab.com",
+    "bitbucket.org",
+    "wordpress.com",
+    "blogspot.com",
+    "tumblr.com",
+    "linkedin.com/in",
+    "linkedin.com/company",
+    "twitter.com",
+    "facebook.com",
+    "dribbble.com",
+    "behance.net",
+    "codepen.io",
+    "replit.com",
+    "gist.github.com",
+    "glitch.me",
+    "kaggle.com",
+    "stackoverflow.com/users",
+    "reddit.com/user",
+    "reddit.com/r",
+    "dev.page",
+    "quora.com",
+    "hashnode.com"
+}
+def get_website_identifier(url: str) -> str:
+    """
+    Returns a unique website identifier that groups URLs correctly.
+    - Uses the base domain for general websites.
+    - For known multi-user domains, includes the first path segment.
+    """
+    parsed_url = urlparse(url)
+    base_domain = parsed_url.netloc.lower()
+    
+    if base_domain in MULTI_USER_DOMAINS:
+        # Extract first path segment (e.g., github.com/Rayan-Mansoor)
+        path_parts = parsed_url.path.strip("/").split("/")
+        if path_parts:
+            return f"{base_domain}/{path_parts[0]}"
+    
+    return base_domain  # Default behavior for normal websites
+
+
+MULTI_USER_DOMAINS = {
+    # Code repositories
+    "github.com",
+    "gitlab.com",
+    "bitbucket.org",
+    "codepen.io",
+    "replit.com",
+    "gist.github.com",
+    "glitch.me",
+    
+    # Blogging and content platforms
+    "medium.com",
+    "dev.to",
+    "substack.com",
+    "hashnode.dev",
+    "hashnode.com",
+    "wordpress.com",
+    "blogspot.com",
+    "tumblr.com",
+    "mirror.xyz",
+    "notion.site",
+    
+    # Social networks
+    "linkedin.com",
+    "twitter.com",
+    "facebook.com",
+    "instagram.com",
+    "pinterest.com",
+    "threads.net",
+    
+    # Professional portfolios
+    "dribbble.com",
+    "behance.net",
+    "artstation.com",
+    "deviantart.com",
+    
+    # Q&A and forums
+    "stackoverflow.com",
+    "reddit.com",
+    "quora.com",
+    "discourse.org",
+    
+    # Technical/Data
+    "kaggle.com",
+    "huggingface.co",
+    "kaggle.com",
+    "dev.page",
+    
+    # Documentation/Wikis
+    "readthedocs.io",
+    "gitbook.io"
+}
+
+# Define special path prefixes for certain domains
+SPECIAL_PATH_PREFIXES = {
+    "linkedin.com": ["in", "company", "school"],
+    "reddit.com": ["user", "r"],
+    "stackoverflow.com": ["users", "questions"],
+    "github.com": ["orgs"],
+    "twitter.com": ["i", "hashtag"],
+    "facebook.com": ["groups", "pages"],
+    "discord.com": ["channels", "servers"],
+    "notion.so": ["workspace"],
+    "huggingface.co": ["spaces", "datasets"],
+    "instagram.com": ["explore"],
+    "youtube.com": ["channel", "c", "user"],
+    "twitch.tv": ["directory", "team"],
+    "pinterest.com": ["boards"]
+}
+
+def get_website_identifier(url: str) -> str:
+    """
+    Returns a unique website identifier that groups URLs correctly.
+    """
+    parsed_url = urlparse(url)
+    base_domain = parsed_url.netloc.lower()
+    
+    # Extract domain without 'www.' if present
+    domain_without_www = base_domain.removeprefix("www.")
+    
+    # Check if this is a multi-user domain
+    if domain_without_www in MULTI_USER_DOMAINS:
+        path_parts = parsed_url.path.strip("/").split("/")
+        
+        # Handle special path prefixes
+        if domain_without_www in SPECIAL_PATH_PREFIXES and path_parts:
+            if path_parts[0] in SPECIAL_PATH_PREFIXES[domain_without_www] and len(path_parts) > 1:
+                return f"{base_domain}/{path_parts[0]}/{path_parts[1]}"
+        
+        # Standard path handling
+        if path_parts:
+            return f"{base_domain}/{path_parts[0]}"
+    
+    return base_domain
+
 async def update_conversation_summary_incremental(user_id: str, session_id: str, messages: list, threshold: int = 8) -> str:
-    from supabase_database import get_conversation_summary, get_unsummarized_messages, update_conversation_title, update_conversation_summary
+    from database_functions import get_conversation_summary, get_unsummarized_messages, update_conversation_title, update_conversation_summary
 
     # Retrieve the conversation session details including summary, last_summarized_index, and current_message_index.
     session = await get_conversation_summary(user_id, session_id)

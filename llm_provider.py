@@ -28,7 +28,7 @@ class LLMProvider:
             return cls._connections[org_id][1]
 
         # Dynamically fetch the LLM API key/config for this organization.
-        from supabase_database import fetch_llm_api_key  # adjust the import as needed
+        from database_functions import fetch_llm_api_key  # adjust the import as needed
 
         raw_config = fetch_llm_api_key(org_id)
         if not raw_config:

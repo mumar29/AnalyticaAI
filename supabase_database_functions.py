@@ -6,7 +6,7 @@ from LLM_analysis import get_embedding
 from agent_functions import Document
 from llm_provider import LLMConnection
 from models import DatabaseConnection, ProcessedChunk
-from supabase_provider import SupabaseProvider
+from main_supabase_provider import MainSupabaseProvider
 from utils import execute_query
 
 ALLOWED_LLM_PROVIDERS = {"GROQ", "GEMINI", "OLLAMA"}
@@ -27,7 +27,7 @@ async def set_sql_db_credentials(org_id: str, credentials: DatabaseConnection) -
         }
 
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         # Upsert: Replace existing row where org_id matches or insert if it doesn't exist
         response = (
@@ -65,7 +65,7 @@ async def set_llm_api_key(org_id: str, llm_credentials: LLMConnection) -> Dict[s
         }
 
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         response = (
             supabase.table("api_keys")
@@ -89,7 +89,7 @@ async def set_llm_api_key(org_id: str, llm_credentials: LLMConnection) -> Dict[s
 def fetch_sql_db_credentials(org_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve the API key for a given user ID from Supabase."""
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         response = (
             supabase.table("database_credentials")
@@ -105,7 +105,7 @@ def fetch_sql_db_credentials(org_id: str) -> Optional[Dict[str, Any]]:
 def fetch_llm_api_key(org_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve the API key for a given user ID from Supabase."""
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         response = (
             supabase.table("api_keys")
@@ -288,7 +288,7 @@ async def create_document_record(path: str, source_type: str, org_id: str) -> st
     }
 
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
         result = supabase.table("md_documents").insert(doc_data).execute()
         document_id = result.data[0]['document_id']
         return document_id
@@ -306,7 +306,7 @@ async def finalize_document(document_id: str, title: str, summary: str,
     }
 
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
         supabase.table("md_documents").update(update_data).eq("document_id", document_id).execute()
     except Exception as e:
         raise e
@@ -323,7 +323,7 @@ def store_chunk(chunk: ProcessedChunk):
         "embedding": chunk.embedding
     }
 
-    supabase = SupabaseProvider.get_client()
+    supabase = MainSupabaseProvider.get_client()
     result = supabase.table("md_chunks").insert(text_data).execute()
     chunk_id = result.data[0]['chunk_id']
 
@@ -356,7 +356,7 @@ async def retrieve_all_documents(org_id: int, access_level: str = "member") -> L
 
 
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
         documents_result = supabase.table('md_documents') \
             .select('document_id, title, summary') \
             .eq("organization_id", org_id) \
@@ -388,7 +388,7 @@ async def retrieve_relevant_chunks(document_ids: List[int], user_query: str) -> 
         # Get the embedding for the query
         query_embedding = get_embedding(user_query)
 
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         # Query Supabase for relevant documents
         result = supabase.rpc(
@@ -424,7 +424,7 @@ async def retrieve_relevant_chunks(document_ids: List[int], user_query: str) -> 
 
 async def retrieve_chunks_tables(chunk_ids: List[int]) -> List[str]:
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         # Query Supabase for chunk tables
         result = supabase.from_('md_tables') \
@@ -445,7 +445,7 @@ async def retrieve_chunks_tables(chunk_ids: List[int]) -> List[str]:
 
 async def create_conversation_session(user_id): 
     try:   
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         # If no existing conversation, create a new one
         response = supabase.table("conversations").insert(
@@ -460,7 +460,7 @@ async def create_conversation_session(user_id):
 
 async def get_conversation_session(user_id, conversation_id): 
     try:   
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         # If no existing conversation, create a new one
         response = supabase.table("conversations") \
@@ -482,7 +482,7 @@ async def get_conversation_session(user_id, conversation_id):
 async def update_conversation_title(user_id: str, conversation_id: str, title: str):
     """Update the title of a conversation for a given user."""
     try:   
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         # If no existing conversation, create a new one
         response = supabase.table("conversations") \
@@ -503,7 +503,7 @@ async def update_conversation_title(user_id: str, conversation_id: str, title: s
 async def update_conversation_summary(user_id: str, conversation_id: str, updated_summary: str, last_summarized_index):
     """Update the summary of a conversation for a given user."""
     try:   
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         # If no existing conversation, create a new one
         response = supabase.table("conversations") \
@@ -526,7 +526,7 @@ async def update_conversation_summary(user_id: str, conversation_id: str, update
 
 async def get_conversation_summary(user_id: str, conversation_id: str) -> List[dict] | None:
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         response = supabase.table("conversations") \
             .select("summary, total_messages, last_summarized_message_count") \
@@ -547,7 +547,7 @@ async def get_conversation_summary(user_id: str, conversation_id: str) -> List[d
 
 async def get_user_conversations(user_id: str) -> List[dict] | None:
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         response = supabase.table("conversations") \
             .select("*") \
@@ -567,7 +567,7 @@ async def get_user_conversations(user_id: str) -> List[dict] | None:
 
 async def get_conversation_messages(user_id: int, conversation_id, limit: Optional[int] = None)-> list | None:
     try: 
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         response = supabase.rpc(
             "get_conversation_messages_for_user",
@@ -595,7 +595,7 @@ async def save_conversation_messages(messages: list) -> list:
         if not messages:
             raise ValueError("At least one message must be provided.")
         
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         response = supabase.table("messages").insert(messages).execute()
         if not response.data:
@@ -615,7 +615,7 @@ async def get_or_create_conversation_session_and_history(
     If no valid conversation_id is provided, creates a new conversation.
     """
     # Call the custom SQL function via supabase.rpc.
-    supabase = SupabaseProvider.get_client()
+    supabase = MainSupabaseProvider.get_client()
 
     response = supabase.rpc(
         "get_or_create_conversation_session_and_history",
@@ -639,7 +639,7 @@ async def get_or_create_conversation_session_and_history(
     
 async def get_unsummarized_messages(conversation_id: str, last_index: int):
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         response = supabase.table("messages") \
             .select("role, text_content, created_at") \
@@ -659,7 +659,7 @@ async def get_unsummarized_messages(conversation_id: str, last_index: int):
 
 async def register_organization(org_name: str, admin_name: str, admin_email: str, admin_password: str):
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         response = supabase.rpc(
             "create_organization_admin",
@@ -682,7 +682,7 @@ async def register_organization(org_name: str, admin_name: str, admin_email: str
 
 async def get_user(user_email: str):
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         response = supabase.table("users") \
             .select("*") \
@@ -701,7 +701,7 @@ async def get_user(user_email: str):
     
 async def create_user(org_id: int, user_name: str, user_email: str, user_password: str, user_role: str):
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
 
         response = supabase.table("users") \
             .insert({
@@ -727,7 +727,7 @@ async def get_control_tables(organization_id: int) -> List[dict] | None:
     Retrieve all control entries for a given organization.
     """
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
         response = supabase.table("database_access_control") \
             .select("table_name, access_level") \
             .eq("organization_id", organization_id) \
@@ -747,7 +747,7 @@ async def insert_control_tables(new_tables: list):
     Insert a new control entry for the given organization and table with the specified access level.
     """
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
         response = supabase.table("database_access_control").insert(new_tables).execute()
 
         if not response.data:
@@ -765,7 +765,7 @@ async def delete_control_tables(organization_id: int, table_names: list):
     Delete multiple control entries for the given organization and list of tables.
     """
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
         response = (
             supabase
             .table("database_access_control")
@@ -789,7 +789,7 @@ async def update_control_table_access(organization_id: int, table_name: str, new
     Update the access level of a specific table for a given organization.
     """
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
         response = (
             supabase
             .table("database_access_control")
@@ -812,7 +812,7 @@ async def update_document_access(organization_id: int, doc_id: int, new_access_l
     Update the access level of a specific document for a given organization.
     """
     try:
-        supabase = SupabaseProvider.get_client()
+        supabase = MainSupabaseProvider.get_client()
         response = (
             supabase
             .table("md_documents")

@@ -1,16 +1,27 @@
 # crawler.py
-from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig, RateLimiter, CrawlerMonitor, DisplayMode, MemoryAdaptiveDispatcher
+from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig, DefaultMarkdownGenerator, PruningContentFilter, RateLimiter, CrawlerMonitor, DisplayMode, MemoryAdaptiveDispatcher
 
-async def crawl_website(urls: list[str]):
+async def crawl_website(urls: list[str], headless: bool = False):
     """Crawl multiple URLs and return their markdown content."""
     browser_config = BrowserConfig(
         browser_type="chromium",
-        headless=True, 
-        verbose=False
+        chrome_channel="msedge",
+        headless=headless, 
+        verbose=False,
     )
+    
+    prune_filter = PruningContentFilter(
+        threshold=0.45,
+        threshold_type="dynamic",
+        min_word_threshold=5
+    )
+
+    md_generator = DefaultMarkdownGenerator(content_filter=prune_filter)
+
     run_config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
-        stream=False
+        stream=False,
+        markdown_generator=md_generator
     )
 
     dispatcher = MemoryAdaptiveDispatcher(
@@ -22,7 +33,6 @@ async def crawl_website(urls: list[str]):
             max_delay=10.0,
             max_retries=2
         ),
-        monitor=CrawlerMonitor(display_mode=DisplayMode.AGGREGATED)
     )
 
     async with AsyncWebCrawler(config=browser_config) as crawler:

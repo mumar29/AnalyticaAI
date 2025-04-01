@@ -26,9 +26,6 @@ class DatabaseService:
     def execute_query(self, query: str, params: Dict[str, Any] = None):
         return self._provider.execute_query(query, params)
     
-    def insert(self, table: str, data: Dict[str, Any]):
-        return self._provider.execute_insert(table, data)
-    
     def insert(self, table: str, data: Any):
         if isinstance(data, list):
             return self._provider.execute_bulk_insert(table, data)
@@ -44,7 +41,7 @@ class DatabaseService:
         return self._provider.execute_update(table, data, match_criteria)
     
     def select(self, table: str, columns: List[str], filters: Dict[str, Any] = None, 
-              order_by: str = None, desc: bool = False, limit: int = None):
+              order_by: str = None, desc: bool = False, limit: int = None, offset: int = None):
         return self._provider.execute_select(table, columns, filters, order_by, desc, limit)
     
     def delete(self, table: str, match_criteria: Dict[str, Any]):

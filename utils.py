@@ -220,6 +220,7 @@ async def update_conversation_summary_incremental(user_id: str, session_id: str,
 
     # Retrieve the conversation session details including summary, last_summarized_index, and current_message_index.
     session = await get_conversation_summary(user_id, session_id)
+    
     title = session.get("title", "")
     summary = session.get("summary", "")
     last_index = session.get("last_summarized_message_count", 0)

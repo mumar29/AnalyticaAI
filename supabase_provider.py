@@ -60,7 +60,8 @@ class SupabaseProvider(DatabaseInterface):
                     filters: Dict[str, Any] = None, 
                     order_by: str = None, 
                     desc: bool = False,
-                    limit: int = None) -> List[Dict[str, Any]]:
+                    limit: int = None,
+                    offset: int = None) -> List[Dict[str, Any]]:
         # Start with the base query
         query = self._client.table(table).select(",".join(columns))
         
@@ -80,18 +81,25 @@ class SupabaseProvider(DatabaseInterface):
         if limit:
             query = query.limit(limit)
         
+        if offset is not None:
+            query = query.range(offset, offset + 1000000)
+        
         response = query.execute()
         return response.data if response.data else []
 
     def execute_delete(self, table: str, match_criteria: Dict[str, Any]) -> Dict[str, Any]:
         query = self._client.table(table).delete()
         
-        # Apply match criteria
+        # Apply match criteria, using 'in_' if the value is a list
         for key, value in match_criteria.items():
-            query = query.eq(key, value)
+            if isinstance(value, list):
+                query = query.in_(key, value)
+            else:
+                query = query.eq(key, value)
         
         response = query.execute()
         return response.data[0] if response.data else {}
+
     
     def call_procedure(self, procedure: str, params: Dict[str, Any] = None, param_types: Dict[str, str] = None) -> Any:
         response = self._client.rpc(procedure, params).execute()

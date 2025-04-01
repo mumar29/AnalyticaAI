@@ -73,7 +73,11 @@ def fetch_sql_db_credentials(org_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve the API key for a given user ID from Supabase."""
     try:
         provider = DatabaseService.get_instance()
-        results = provider.select("database_credentials", ["*"], filters={"organization_id": org_id})
+        results = provider.select(
+            table="database_credentials", 
+            columns=["*"], 
+            filters={"organization_id": org_id}
+        )
         return results[0] if results else None
     except Exception:
         return None
@@ -82,7 +86,11 @@ def fetch_llm_api_key(org_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve the API key for a given user ID from Supabase."""
     try:
         provider = DatabaseService.get_instance()
-        results = provider.select("api_keys", ["*"], filters={"organization_id": org_id})
+        results = provider.select(
+            table="api_keys", 
+            columns=["*"], 
+            filters={"organization_id": org_id}
+        )
         return results[0] if results else None
     except Exception:
         return None
@@ -183,7 +191,7 @@ async def get_filtered_schema(organization_id: int, access_level: str = "member"
     for table in tables_to_remove:
         filtered_schema["tables"].pop(table, None)
     
-    # print("Filtered SQL Schema is \n", filtered_schema)
+    print("Filtered SQL Schema is \n", filtered_schema)
     return filtered_schema
 
 async def create_document_record(path: str, source_type: str, org_id: str) -> str:
@@ -249,18 +257,16 @@ async def retrieve_all_documents(org_id: int, access_level: str = "member") -> L
         "member": ["member"]
     }
     allowed_levels = role_hierarchy.get(access_level, ["member"])
-    print("======================================================================")
-    print("Allowed access levels are \n", allowed_levels)
-    print("======================================================================")
+    
     try:
         provider = DatabaseService.get_instance()
-        # Since the abstraction does not support 'IN', we form a raw SQL query.
-        documents_result = provider.select("md_documents", ["document_id", "title", "summary"], filters={"organization_id": org_id, "access_level": allowed_levels})
+        documents_result = provider.select(
+            table="md_documents",
+            columns=["document_id", "title", "summary"],
+            filters={"organization_id": org_id, "access_level": allowed_levels}
+        )
         if not documents_result:
             return []
-        print("======================================================================")
-        print("Raw documents retrieved are \n", documents_result)
-        print("======================================================================")
         documents = [
             Document(id=doc["document_id"], title=doc["title"], summary=doc["summary"])
             for doc in documents_result
@@ -306,13 +312,14 @@ async def retrieve_relevant_chunks(document_ids: List[int], user_query: str) -> 
 async def retrieve_chunks_tables(chunk_ids: List[int]) -> List[str]:
     try:
         provider = DatabaseService.get_instance()
-        # Build a raw SQL query to simulate an IN-filter.
-        ids = ",".join(map(str, chunk_ids))
-        query = f"SELECT csv_data FROM md_tables WHERE chunk_id IN ({ids})"
-        result = provider.execute_query(query)
-        if not result:
+        results = provider.select(
+            table="md_tables",
+            columns=["csv_data"],
+            filters={"chunk_id": chunk_ids}
+        )
+        if not results:
             return []
-        csv_data_list = [item['csv_data'] for item in result]
+        csv_data_list = [item['csv_data'] for item in results]
         return csv_data_list
     except Exception as e:
         print(f"Error retrieving documentation tables: {e}")
@@ -330,7 +337,11 @@ async def create_conversation_session(user_id):
 async def get_conversation_session(user_id, conversation_id):
     try:
         provider = DatabaseService.get_instance()
-        results = provider.select("conversations", ["id", "summary"], filters={"user_id": user_id, "id": conversation_id})
+        results = provider.select(
+            table="conversations", 
+            columns=["id", "summary"], 
+            filters={"user_id": user_id, "id": conversation_id}
+        )
         if results:
             return results[0]
         else:
@@ -370,8 +381,8 @@ async def get_conversation_summary(user_id: str, conversation_id: str) -> Option
     try:
         provider = DatabaseService.get_instance()
         results = provider.select(
-            "conversations",
-            ["summary", "total_messages", "last_summarized_message_count"],
+            table="conversations",
+            columns=["title", "summary", "total_messages", "last_summarized_message_count"],
             filters={"user_id": user_id, "id": conversation_id},
             order_by="created_at",
             desc=True,
@@ -386,8 +397,8 @@ async def get_user_conversations(user_id: str) -> Optional[List[dict]]:
     try:
         provider = DatabaseService.get_instance()
         results = provider.select(
-            "conversations",
-            ["*"],
+            table="conversations",
+            columns=["*"],
             filters={"user_id": user_id},
             order_by="created_at",
             desc=True
@@ -416,15 +427,11 @@ async def get_conversation_messages(user_id: int, conversation_id, limit: Option
 async def save_conversation_messages(messages: list) -> list:
     """
     Save multiple conversation messages in a single database call.
-    (Here we iterate over messages and use the insert abstraction; consider enhancing the abstraction for bulk inserts.)
     """
-    results = []
     try:
         provider = DatabaseService.get_instance()
-        for msg in messages:
-            result = provider.insert("messages", msg)
-            results.append(result)
-        return results
+        result = provider.insert("messages", messages)
+        return result
     except Exception as e:
         print(f"Error saving conversation messages: {e}")
         return []
@@ -452,15 +459,13 @@ async def get_or_create_conversation_session_and_history(
 async def get_unsummarized_messages(conversation_id: str, last_index: int):
     try:
         provider = DatabaseService.get_instance()
-        # Using raw SQL to simulate a range query.
-        query = f"""
-            SELECT role, text_content, created_at 
-            FROM messages 
-            WHERE conversation_id = '{conversation_id}' 
-            ORDER BY created_at 
-            LIMIT 100000 OFFSET {last_index}
-        """
-        results = provider.execute_query(query)
+        results = provider.select(
+            table="messages",
+            columns=["role", "text_content", "created_at"],
+            filters={"conversation_id": conversation_id},
+            order_by="created_at",
+            offset=last_index
+        )
         return results if results else None
     except Exception as e:
         print(f"Error retrieving unsummarized messages: {e}")
@@ -515,8 +520,8 @@ async def get_control_tables(organization_id: int) -> Optional[List[dict]]:
     try:
         provider = DatabaseService.get_instance()
         results = provider.select(
-            "database_access_control",
-            ["table_name", "access_level"],
+            table="database_access_control",
+            columns=["id", "table_name", "access_level"],
             filters={"organization_id": organization_id}
         )
         return results if results else None
@@ -527,34 +532,25 @@ async def get_control_tables(organization_id: int) -> Optional[List[dict]]:
 async def insert_control_tables(new_tables: list):
     """
     Insert new control entries.
-    (Note: If bulk insertion is needed, consider extending the abstraction.)
     """
     try:
         provider = DatabaseService.get_instance()
-        results = []
-        for entry in new_tables:
-            res = provider.insert("database_access_control", entry)
-            results.append(res)
+        results = provider.insert("database_access_control", new_tables)
         return results if results else None
     except Exception as e:
-        print(f"Error inserting control entry: {e}")
+        print(f"Error inserting control tables: {e}")
         return None
 
 async def delete_control_tables(organization_id: int, table_names: list):
     """
     Delete multiple control entries.
-    (Since our abstraction does not support multi-field matching with 'IN', a raw SQL query is used.)
     """
     try:
         provider = DatabaseService.get_instance()
-        names = ",".join([f"'{t}'" for t in table_names])
-        query = f"""
-            DELETE FROM database_access_control 
-            WHERE organization_id = {organization_id} 
-            AND table_name IN ({names})
-            RETURNING *
-        """
-        results = provider.execute_query(query)
+        results = provider.delete(
+            table="database_access_control",
+            match_criteria={"organization_id": organization_id, "table_name": table_names}
+        )
         return results if results else None
     except Exception as e:
         print(f"Error deleting control entries: {e}")
@@ -590,4 +586,36 @@ async def update_document_access(organization_id: int, doc_id: int, new_access_l
         return result if result else None
     except Exception as e:
         print(f"Error updating access level for document {doc_id}: {e}")
+        return None
+
+async def get_control_documents(organization_id: int):
+    """
+    Get the access level of all documents for a given organization.
+    """
+    try:
+        provider = DatabaseService.get_instance()
+        result = provider.select(
+            table="md_documents",
+            columns=["document_id", "path", "source_type", "title", "summary", "access_level"],
+            filters={"organization_id": organization_id}
+        )
+        return result if result else None
+    except Exception as e:
+        print(f"Error retrieving documents for organization {organization_id}: {e}")
+        return None
+
+async def get_created_users(organization_id: int):
+    """
+    Get the access level of all documents for a given organization.
+    """
+    try:
+        provider = DatabaseService.get_instance()
+        result = provider.select(
+            table="users",
+            columns=["id", "user_name", "email", "role"],
+            filters={"organization_id": organization_id}
+        )
+        return result if result else None
+    except Exception as e:
+        print(f"Error retrieving users for organization {organization_id}: {e}")
         return None

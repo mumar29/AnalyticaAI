@@ -55,7 +55,7 @@ class PostgresProvider(DatabaseInterface):
     def execute_bulk_insert(self, table: str, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not data:
             return []
-        # Assume every dict has the same keys.
+        
         columns = list(data[0].keys())
         
         # Build placeholders for each row with unique parameter names.
@@ -64,10 +64,9 @@ class PostgresProvider(DatabaseInterface):
         for i, row in enumerate(data):
             row_placeholders = []
             for col in columns:
-                # Create a unique placeholder by appending the row index.
                 placeholder = f"{col}_{i}"
                 row_placeholders.append(f"%({placeholder})s")
-                all_params[placeholder] = row[col]
+                all_params[placeholder] = adapt_value(row[col])  # 🔹 Apply adapt_value here
             placeholder_rows.append(f"({', '.join(row_placeholders)})")
         
         query = f"""
@@ -78,7 +77,6 @@ class PostgresProvider(DatabaseInterface):
         
         result = self.execute_query(query, all_params)
         return result if result else []
-
 
     def execute_upsert(self, table: str, data: Dict[str, Any], 
                       on_conflict: List[str] = None) -> Dict[str, Any]:
@@ -133,7 +131,8 @@ class PostgresProvider(DatabaseInterface):
                     filters: Dict[str, Any] = None,
                     order_by: str = None,
                     desc: bool = False,
-                    limit: int = None) -> List[Dict[str, Any]]:
+                    limit: int = None,
+                    offset: int = None) -> List[Dict[str, Any]]:
         columns_str = ", ".join(columns)
         query = f"SELECT {columns_str} FROM {table}"
         
@@ -157,23 +156,32 @@ class PostgresProvider(DatabaseInterface):
         if limit:
             query += f" LIMIT {limit}"
         
+        if offset is not None:
+            query += f" OFFSET {offset}"
+        
         return self.execute_query(query, params)
 
     
     def execute_delete(self, table: str, match_criteria: Dict[str, Any]) -> Dict[str, Any]:
-        # Build WHERE clause
-        where_items = [f"{key} = %({key})s" for key in match_criteria.keys()]
-        where_clause = " AND ".join(where_items)
+        where_clauses = []
+        params = {}
+        for key, value in match_criteria.items():
+            if isinstance(value, list):
+                # Use the ANY operator for lists.
+                where_clauses.append(f"{key} = ANY(%({key})s)")
+            else:
+                where_clauses.append(f"{key} = %({key})s")
+            params[key] = value
+        where_clause = " AND ".join(where_clauses)
         
         query = f"""
             DELETE FROM {table}
             WHERE {where_clause}
             RETURNING *
         """
-        
-        result = self.execute_query(query, match_criteria)
+        result = self.execute_query(query, params)
         return result[0] if result else {}
-    
+ 
     def call_procedure(self, procedure: str, params: Dict[str, Any] = None, param_types: Dict[str, str] = None) -> Any:
         conn = self._get_connection()
         try:

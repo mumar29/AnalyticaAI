@@ -27,7 +27,7 @@ from lang_graph import handle_query
 from llm_provider import LLMConnection, LLMProvider
 from logging_config import logger
 from models import DatabaseConnection
-from database_functions import create_user, fetch_sql_db_credentials, get_user, register_organization, set_llm_api_key, fetch_llm_api_key, get_conversation_messages, get_database_schema, get_user_conversations, set_sql_db_credentials, update_control_table_access, update_document_access
+from database_functions import create_user, fetch_sql_db_credentials, get_control_documents, get_control_tables, get_created_users, get_user, register_organization, set_llm_api_key, fetch_llm_api_key, get_conversation_messages, get_database_schema, get_user_conversations, set_sql_db_credentials, update_control_table_access, update_document_access
 from main_supabase_provider import MainSupabaseProvider
 from utils import execute_query, get_website_identifier, json_default, list_dict_to_csv, save_credentials_to_env
 from websocket_manager import manager
@@ -700,7 +700,27 @@ async def process_website_endpoint(
             detail=f"Error processing website: {str(e)}"
         )
 
-@router.post("/update_table_access_level")
+@router.get("/get-table-access-level")
+async def get_table_access_level_endpoint(
+    current_user: User = Depends(get_current_user),
+):
+    """Update Table Access Level"""
+    try:
+
+        if current_user.role != "admin":
+            raise HTTPException(403, "Admin privileges required")
+
+        response = await get_control_tables(current_user.organization_id)
+
+        return response
+
+    except HTTPException as http_exc:
+        raise http_exc
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@router.post("/update-table-access-level")
 async def update_table_access_level_endpoint(
     request: UpdateTableAccessRequest,
     current_user: User = Depends(get_current_user),
@@ -725,7 +745,27 @@ async def update_table_access_level_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
-@router.post("/update_document_access_level")
+@router.get("/get-document-access-level")
+async def get_table_access_level_endpoint(
+    current_user: User = Depends(get_current_user),
+):
+    """Update Table Access Level"""
+    try:
+
+        if current_user.role != "admin":
+            raise HTTPException(403, "Admin privileges required")
+
+        response = await get_control_documents(current_user.organization_id)
+
+        return response
+
+    except HTTPException as http_exc:
+        raise http_exc
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@router.post("/update-document-access-level")
 async def update_document_access_level_endpoint(
     request: UpdateDocumentAccessRequest,
     current_user: User = Depends(get_current_user),
@@ -750,6 +790,26 @@ async def update_document_access_level_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
+@router.get("/get-users")
+async def get_users_endpoint(
+    current_user: User = Depends(get_current_user),
+):
+    """Update Organization Users"""
+    try:
+
+        if current_user.role != "admin":
+            raise HTTPException(403, "Admin privileges required")
+
+        response = await get_created_users(current_user.organization_id)
+
+        return response
+
+    except HTTPException as http_exc:
+        raise http_exc
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
 app.include_router(router, prefix="/api/v1")
 
 if __name__ == "__main__":
@@ -761,3 +821,4 @@ if __name__ == "__main__":
         log_config=None,  # Disable default uvicorn logs
         reload=False  # Disable reload on Windows
     )
+    

@@ -35,7 +35,8 @@ class DatabaseInterface(ABC):
                       filters: Dict[str, Any] = None, 
                       order_by: str = None, 
                       desc: bool = False,
-                      limit: int = None) -> List[Dict[str, Any]]:
+                      limit: int = None,
+                      offset: int = None) -> List[Dict[str, Any]]:
         """Select data from a table with filters"""
         pass
     

@@ -169,11 +169,15 @@ BEGIN
     SELECT COALESCE(json_agg(sub), '[]'::json)
     INTO messages
     FROM (
-        SELECT m.*
-        FROM messages m
-        WHERE m.conversation_id = conv.id
-        ORDER BY m.id ASC
-        LIMIT p_history_limit
+        SELECT *
+        FROM (
+            SELECT m.*
+            FROM messages m
+            WHERE m.conversation_id = conv.id
+            ORDER BY m.id DESC
+            LIMIT p_history_limit
+        ) recent
+        ORDER BY id ASC
     ) sub;
 
     RETURN messages;

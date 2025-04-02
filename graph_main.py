@@ -39,6 +39,7 @@ async def ensure_db_initialized(current_user: User = Depends(get_current_user)):
     try:
         # This call will only fetch the configuration if no connection exists yet.
         DatabaseProvider.get_or_initialize(current_user.organization_id)
+        
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -290,16 +291,18 @@ async def set_sql_database(
     current_user: User = Depends(get_current_user),
 ):
     """Update database credentials using dynamic request parameters"""
+    if current_user.role != "admin":
+        raise HTTPException(403, "Admin privileges required")
+    
     try:
-
-        if current_user.role != "admin":
-            raise HTTPException(403, "Admin privileges required")
-
+        
         # Initialize database provider with validated request data
-        response = await set_sql_db_credentials(current_user.organization_id, request)
+        DatabaseProvider.initialize(current_user.organization_id, request)
 
-        if response.get("success"):  # Ensure we check for a successful response
-            DatabaseProvider.get_or_initialize(current_user.organization_id)
+        response = await set_sql_db_credentials(current_user.organization_id, request)
+        
+        if not response.get("success"):
+            raise HTTPException(status_code=500, detail="Failed to save database config")
 
         return {
             "status": "success",
@@ -307,14 +310,14 @@ async def set_sql_database(
             "data": response
         }
     
-    except ValidationError as e:
-        return {"status": "error", "message": f"Validation error: {str(e)}"}
+    except HTTPException:
+        raise 
     
     except ConnectionError as e:
-        return {"status": "error", "message": f"Connection failed: {str(e)}"}
+        raise HTTPException(status_code=400, detail=f"SQL database initialization failed: {str(e)}")
     
     except Exception as e:
-        return {"status": "error", "message": f"Unexpected error: {str(e)}"}
+        return {"status": 500, "message": f"Unexpected error: {str(e)}"}
 
 @router.post("/setup-main-database")
 def setup_main_database(
@@ -341,15 +344,19 @@ async def set_llm_api_key_endpoint(
     current_user: User = Depends(get_current_user),
 ):
     """Update LLM api key"""
+    if current_user.role != "admin":
+        raise HTTPException(403, "Admin privileges required")
+    
     try:
 
-        if current_user.role != "admin":
-            raise HTTPException(403, "Admin privileges required")
+        # Try initializing the LLM provider first
+        LLMProvider.initialize(current_user.organization_id, request)
 
+        # If initialization succeeds, save the API key in the database
         response = await set_llm_api_key(current_user.organization_id, request)
 
-        if response.get("success"):  # Ensure we check for a successful response
-            LLMProvider.get_or_initialize(current_user.organization_id)
+        if not response.get("success"):
+            raise HTTPException(status_code=500, detail="Failed to save LLM API key in the database")
 
         return {
             "status": "success",
@@ -357,8 +364,11 @@ async def set_llm_api_key_endpoint(
             "data": response
         }
 
-    except HTTPException as http_exc:
-        raise http_exc
+    except HTTPException:
+        raise 
+
+    except ConnectionError as e:
+        raise HTTPException(status_code=400, detail=f"LLM initialization failed: {str(e)}")
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")

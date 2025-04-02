@@ -27,3 +27,8 @@ build/
 Thumbs.db
 
 .vercel
+
+.vscode/
+
+markdowns/
+pdfs/

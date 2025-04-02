@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
     user_name VARCHAR NOT NULL,
     email TEXT UNIQUE NOT NULL,
     hashed_password TEXT NOT NULL,
-    role VARCHAR CHECK (role IN ('admin', 'member')) NOT NULL,
+    role VARCHAR CHECK (role IN ('admin', 'manager', 'member')) NOT NULL,
     created_at TIMESTAMP DEFAULT NOW()
 );
 

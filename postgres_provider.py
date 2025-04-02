@@ -202,6 +202,16 @@ class PostgresProvider(DatabaseInterface):
             
             if cursor.description:
                 results = cursor.fetchall()
+                
+                # Handle case where result is a single row with procedure name as column
+                if len(results) == 1 and procedure in results[0]:
+                    return results[0][procedure]
+                
+                # Handle case where we have multiple rows but each has procedure name as column
+                if results and all(procedure in row for row in results):
+                    return [row[procedure] for row in results]
+                
+                # Standard list of dictionaries for simple results
                 return [dict(row) for row in results]
             else:
                 return []

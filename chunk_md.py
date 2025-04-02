@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 from langchain.text_splitter import MarkdownTextSplitter
 
 from LLM_analysis import get_embedding, get_keywords
-from agent_functions import generate_title_and_summary
+from agent_functions import generate_intermediate_summary, generate_title_and_summary
 from mdTocsv import get_md_tables
 
 from models import ProcessedChunk
@@ -212,9 +212,6 @@ async def process_document(content: Union[str, List[str]], path: str, source_typ
             chunks = chunk_markdownv2(page_markdown, chunk_size=2000)
             for i, chunk in enumerate(chunks):
                 chunk_object = process_chunk(chunk, i + 1, document_id)
-                print("======================================================================")
-                print("store_chunk function called")
-                print("======================================================================")
                 store_chunk(chunk_object)
                 chunk_summaries.append(chunk_object.summary)
     else:
@@ -222,21 +219,36 @@ async def process_document(content: Union[str, List[str]], path: str, source_typ
         chunks = chunk_markdownv2(content, chunk_size=2000)
         for i, chunk in enumerate(chunks):
             chunk_object = process_chunk(chunk, i + 1, document_id)
-            print("======================================================================")
-            print("store_chunk function called")
-            print("======================================================================")
             store_chunk(chunk_object)
             chunk_summaries.append(chunk_object.summary)
     
-    # Generate document-level summary from chunk summaries
-    combined_chunk_summaries = "\n\n".join(chunk_summaries)
     
-    # Use the first piece of content for title context (or any other heuristic)
-    first_content = content[0] if isinstance(content, list) else content
+     # Hierarchical summarization to handle large documents
+    intermediate_summaries = []
+    batch_size = 10  # Number of chunk summaries to process at once
     
-    doc_content = generate_title_and_summary(first_content + combined_chunk_summaries, "8-10")
+    # Process chunk summaries in batches
+    for i in range(0, len(chunk_summaries), batch_size):
+        batch = chunk_summaries[i:i + batch_size]
+        batch_text = "\n\n".join(batch)
+        
+        # Generate intermediate summary for this batch
+        print("======================================================================")
+        print("generate intermidiate summary called with text: \n", batch_text)
+        print("======================================================================")
+        intermediate_summary = generate_intermediate_summary(batch_text)
+        intermediate_summaries.append(intermediate_summary)
     
-    # If content is a list, combine all markdowns for keyword extraction
+    # Generate document-level summary from intermediate summaries
+    combined_intermediate = "\n\n".join(intermediate_summaries)
+    
+    # Extract a sample of the first content for context
+    first_content_sample = content[0][:1000] if isinstance(content, list) else content[:1000]
+    
+    # Generate final title and summary using the existing function
+    doc_content = generate_title_and_summary(first_content_sample + "\n\n" + combined_intermediate, "8-10")
+    
+    # Generate keywords and embedding
     all_markdown = "\n".join(content) if isinstance(content, list) else content
     doc_keywords = get_keywords(all_markdown, 15)
     doc_embedding = get_embedding(doc_content.summary)

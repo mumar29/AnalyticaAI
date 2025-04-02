@@ -29,6 +29,9 @@ class ChartConfig(BaseModel):
 class ProcessConv(BaseModel):
     title: str
 
+class ProcessSum(BaseModel):
+    summary: str
+
 class ProcessDocument(BaseModel):
     title: str
     summary: str
@@ -153,6 +156,23 @@ def generate_title_and_summary(chunk: str, summary_range: str = "1-2") -> Proces
             "summary": "Error Processing Summary"
         }
 
+def generate_intermediate_summary(chunk_summaries: str) -> ProcessSum:
+    system_prompt = """You are an expert at condensing multiple chunk summaries that belong to some portion of a document into a 
+    shorter intermediate summary. Your task is to identify the most important information across these 
+    summaries and create a concise synthesis that preserves key technical details, main points, and 
+    critical context. Keep your response to 2-3 sentences."""
+    
+    try:
+        
+        response_content = generate_completion(system_prompt, chunk_summaries, ProcessSum.model_json_schema())
+        return ProcessSum.model_validate_json(response_content)
+    
+    except Exception as e:
+        print(f"Error generating intermediate summary: {e}")
+        return {
+            "summary": "Error Processing Intermediate Summary"
+        }
+        
 def generate_conversation_title(messages: list) -> ProcessConv:
     system_prompt = f"""You are conversation title generator, given the first two messages of a conversation session, your task is to generate a suitable title for the conversation
         """
@@ -165,7 +185,7 @@ def generate_conversation_title(messages: list) -> ProcessConv:
     except Exception as e:
         print(f"Error getting conversation title: {e}")
         return {
-            "title": "Conversation",
+            "title": "Error Processing Conversation Title",
         }
 
 def generate_conversation_summary(new_messages: str, existing_summary: str | None) -> LLMResponse:

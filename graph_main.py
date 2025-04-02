@@ -29,7 +29,7 @@ from logging_config import logger
 from models import DatabaseConnection
 from database_functions import create_user, fetch_sql_db_credentials, get_control_documents, get_control_tables, get_created_users, get_user, register_organization, set_llm_api_key, fetch_llm_api_key, get_conversation_messages, get_database_schema, get_user_conversations, set_sql_db_credentials, update_control_table_access, update_document_access
 from main_supabase_provider import MainSupabaseProvider
-from utils import execute_query, get_website_identifier, json_default, list_dict_to_csv, save_credentials_to_env
+from utils import execute_query, get_website_identifier, json_default, list_dict_to_csv, normalize_url, save_credentials_to_env
 from websocket_manager import manager
 from redis_config import get_redis_client
 
@@ -184,7 +184,7 @@ class UserCreate(BaseModel):
     name: str
     email: str
     password: str
-    role: Literal["admin", "manager", "member"] = "member"
+    role: Literal["manager", "member"] = "member"
 
 class LoginRequest(BaseModel):
     email: str
@@ -193,6 +193,8 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str
+    user_name: str
+    org_name: str
 
 # Middleware
 @app.middleware("http")
@@ -257,7 +259,9 @@ async def login_endpoint(login_data: LoginRequest):
     
     return {
         "access_token": access_token,
-        "token_type": "bearer"
+        "token_type": "bearer",
+        "user_name": user["user_name"],
+        "org_name": str(user["organization_id"]),
     }
 
 @router.post("/create-user")
@@ -672,9 +676,22 @@ async def process_website_endpoint(
         if not request.urls:
             raise HTTPException(status_code=400, detail="No URLs provided.")
         
-        headless = request.headless if request.headless is not None else False
+        normalized_urls = [normalize_url(url) for url in request.urls]
 
-        results = await crawl_website(request.urls, headless)
+        # Optionally, validate that URLs have valid schemes
+        invalid_urls = [
+            url for url in normalized_urls
+            if urlparse(url).scheme not in {"http", "https", "file", "raw"}
+        ]
+        if invalid_urls:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid URLs detected: {invalid_urls}. URLs must start with 'http://', 'https://', 'file://', or 'raw:'."
+            )
+        
+        headless = request.headless if request.headless is not None else True
+
+        results = await crawl_website(normalized_urls, headless)
 
         # Filter and gather successful results
         successful_results = [(result.url, result.markdown.fit_markdown) for result in results if result.success]
@@ -816,7 +833,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
         "graph_main:app",
-        host="0.0.0.0",
+        host="192.168.0.101",
         port=port,
         log_config=None,  # Disable default uvicorn logs
         reload=False  # Disable reload on Windows

@@ -215,6 +215,16 @@ def get_website_identifier(url: str) -> str:
     
     return base_domain
 
+def normalize_url(url: str) -> str:
+    """
+    Ensures that the URL starts with a valid scheme. If missing, prepends 'https://'.
+    """
+    parsed = urlparse(url)
+    if not parsed.scheme:
+        # You can adjust to http:// if needed or decide based on other criteria
+        return "https://" + url
+    return url
+
 async def update_conversation_summary_incremental(user_id: str, session_id: str, messages: list, threshold: int = 8) -> str:
     from database_functions import get_conversation_summary, get_unsummarized_messages, update_conversation_title, update_conversation_summary
 

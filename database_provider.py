@@ -16,7 +16,7 @@ class DatabaseProvider:
     _connections: Dict[int, Tuple[DatabaseConnection, Any, str]] = {}
 
     @classmethod
-    def get_or_initialize(cls, org_id: int) -> Any:
+    async def get_or_initialize(cls, org_id: int) -> Any:
         """
         Retrieve the connection for the given organization.
         If the connection does not exist, fetch the config and initialize it.
@@ -26,7 +26,7 @@ class DatabaseProvider:
 
         from database_functions import fetch_sql_db_credentials
         # Fetch configuration as a dict
-        raw_config = fetch_sql_db_credentials(org_id)
+        raw_config = await fetch_sql_db_credentials(org_id)
         if not raw_config:
             raise ConnectionError(f"Database configuration not found for organization {org_id}")
 

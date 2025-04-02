@@ -60,6 +60,7 @@ async def set_llm_api_key(org_id: str, llm_credentials: LLMConnection) -> Dict[s
             "provider": llm_credentials.provider,
             "api_key": llm_credentials.api_key,
             "host": llm_credentials.host,
+            "model": llm_credentials.model
         }
         result = provider.upsert("api_keys", data, on_conflict=["organization_id"])
         if result:
@@ -69,7 +70,7 @@ async def set_llm_api_key(org_id: str, llm_credentials: LLMConnection) -> Dict[s
     except Exception as e:
         return {"success": False, "message": f"Database error while updating API key: {str(e)}"}
 
-def fetch_sql_db_credentials(org_id: str) -> Optional[Dict[str, Any]]:
+async def fetch_sql_db_credentials(org_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve the API key for a given user ID from Supabase."""
     try:
         provider = DatabaseService.get_instance()
@@ -82,7 +83,7 @@ def fetch_sql_db_credentials(org_id: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
-def fetch_llm_api_key(org_id: str) -> Optional[Dict[str, Any]]:
+async def fetch_llm_api_key(org_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve the API key for a given user ID from Supabase."""
     try:
         provider = DatabaseService.get_instance()

@@ -39,9 +39,10 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE TABLE IF NOT EXISTS api_keys (
     id bigserial PRIMARY KEY,
     organization_id BIGINT UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
-    provider text NOT NULL,
+    provider TEXT NOT NULL,
     host TEXT,
-    api_key text,
+    api_key TEXT,
+    model TEXT
     created_at timestamp default now()
 );
 

@@ -1,16 +1,29 @@
 import hashlib
 import json
 from typing import Dict, Optional, Any, Tuple, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 class LLMConnection(BaseModel):
     provider: Literal["GEMINI", "GROQ", "OLLAMA"]
     api_key: Optional[str] = Field(default=None, description="Online LLM host")
     host: Optional[str] = Field(default=None, description="Local LLM host")
-    gemini_model: str = Field(default="gemini-2.0-flash", description="Default model for Gemini")
-    groq_model: str = Field(default="llama-3.3-70b-versatile", description="Default model for Groq")
-    ollama_model: str = Field(default="gemma3:1b", description="Default model for Ollama")
+    model: Optional[str] = Field(default=None, description="Model to use for the provider")
 
+    @model_validator(mode="after")
+    def check_required_fields_and_set_default_model(self):
+        if self.provider in {"GEMINI", "GROQ"}:
+            if not self.api_key:
+                raise ValueError("api_key is required for GEMINI or GROQ provider")
+            if self.model is None:
+                # Set default model based on provider
+                self.__dict__["model"] = "gemini-2.0-flash" if self.provider == "GEMINI" else "llama-3.3-70b-versatile"
+        elif self.provider == "OLLAMA":
+            if not self.host:
+                raise ValueError("host is required for OLLAMA provider")
+            if self.model is None:
+                self.__dict__["model"] = "gemma3:1b"
+        return self
+    
 class LLMProvider:
     """
     LLM provider that supports multiple connections, keyed by organization id.
@@ -19,7 +32,7 @@ class LLMProvider:
     _connections: Dict[int, Tuple[LLMConnection, Any, str]] = {}
 
     @classmethod
-    def get_or_initialize(cls, org_id: int) -> Any:
+    async def get_or_initialize(cls, org_id: int) -> Any:
         """
         Retrieve the LLM client for the given organization.
         If the connection does not exist, fetch the configuration via fetch_llm_api_key() and initialize it.
@@ -30,7 +43,7 @@ class LLMProvider:
         # Dynamically fetch the LLM API key/config for this organization.
         from database_functions import fetch_llm_api_key  # adjust the import as needed
 
-        raw_config = fetch_llm_api_key(org_id)
+        raw_config = await fetch_llm_api_key(org_id)
         if not raw_config:
             raise ConnectionError(f"LLM configuration not found for organization {org_id}")
 
@@ -60,15 +73,15 @@ class LLMProvider:
             if config.provider == "GEMINI":
                 from google import genai
                 new_connection = genai.Client(api_key=config.api_key)
-                cls._test_connection(new_connection, "GEMINI")
+                cls._test_connection(new_connection, "GEMINI", config.model)
             elif config.provider == "GROQ":
                 from groq import Groq
                 new_connection = Groq(api_key=config.api_key)
-                cls._test_connection(new_connection, "GROQ")
+                cls._test_connection(new_connection, "GROQ", config.model)
             elif config.provider == "OLLAMA":
                 from ollama import Client
                 new_connection = Client(host=config.host)
-                cls._test_connection(new_connection, "OLLAMA")
+                cls._test_connection(new_connection, "OLLAMA", config.model)
             else:
                 raise ValueError(f"Unsupported provider: {config.provider}")
 
@@ -105,7 +118,7 @@ class LLMProvider:
             if config.provider == "GROQ":
                 system_prompt_with_schema = f"""{system_prompt}\nReturn your answer as a JSON object following this schema:\n{json.dumps(response_schema, indent=2)}"""
                 chat_completion = client.chat.completions.create(
-                    model=config.groq_model,
+                    model=config.model,
                     messages=[
                         {"role": "system", "content": system_prompt_with_schema},
                         {"role": "user", "content": user_content}
@@ -117,7 +130,7 @@ class LLMProvider:
             elif config.provider == "GEMINI":
                 from google.genai import types
                 chat_completion = client.models.generate_content(
-                    model=config.gemini_model,
+                    model=config.model,
                     contents=user_content,
                     config=types.GenerateContentConfig(
                         system_instruction=system_prompt,
@@ -129,7 +142,7 @@ class LLMProvider:
 
             elif config.provider == "OLLAMA":
                 chat_completion = client.chat(
-                    model=config.ollama_model, 
+                    model=config.model, 
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_content}
@@ -170,27 +183,27 @@ class LLMProvider:
         return hashlib.sha256(config.json().encode()).hexdigest()
 
     @staticmethod
-    def _test_connection(client: Any, provider: str):
+    def _test_connection(client: Any, provider: str, model: str):
         """Test the LLM client connection with a minimal request."""
         try:
             if provider == "GEMINI":
                 # Simple test with minimal tokens.
                 client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model=model,
                     contents="Hello",
                     config={"max_output_tokens": 1}
                 )
             elif provider == "GROQ":
                 # Simple test with minimal tokens.
                 client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model=model,
                     messages=[{"role": "user", "content": "Hello"}],
                     max_tokens=1
                 )
             elif provider == "OLLAMA":
                 # Simple test with minimal tokens.
                 client.chat(
-                    model='gemma3:1b', 
+                    model=model, 
                     messages=[{'role': 'user', 'content': 'Hello'}],
                     options = {"num_predict": 1}
                 )

@@ -237,7 +237,7 @@ async def process_document(content: Union[str, List[str]], path: str, source_typ
         print("generate intermidiate summary called with text: \n", batch_text)
         print("======================================================================")
         intermediate_summary = generate_intermediate_summary(batch_text)
-        intermediate_summaries.append(intermediate_summary)
+        intermediate_summaries.append(intermediate_summary.summary)
     
     # Generate document-level summary from intermediate summaries
     combined_intermediate = "\n\n".join(intermediate_summaries)

@@ -10,7 +10,7 @@ import pdfkit
 from urllib.parse import urlparse
 import aiofiles
 import uvicorn
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Union
 from fastapi import FastAPI, APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
@@ -38,7 +38,7 @@ redis_client = get_redis_client()
 async def ensure_db_initialized(current_user: User = Depends(get_current_user)):
     try:
         # This call will only fetch the configuration if no connection exists yet.
-        DatabaseProvider.get_or_initialize(current_user.organization_id)
+        await DatabaseProvider.get_or_initialize(current_user.organization_id)
         
     except Exception as e:
         raise HTTPException(
@@ -49,7 +49,7 @@ async def ensure_db_initialized(current_user: User = Depends(get_current_user)):
 async def ensure_llm_initialized(current_user: User = Depends(get_current_user)):
     try:
         # This call will only fetch the configuration if no connection exists yet.
-        LLMProvider.get_or_initialize(current_user.organization_id)
+        await LLMProvider.get_or_initialize(current_user.organization_id)
 
     except Exception as e:
         raise HTTPException(
@@ -285,8 +285,81 @@ async def create_user_endpoint(
     
     # return {"user_id": user[0]["id"]}
 
+
+# Base class for self-hosted databases (PostgreSQL, MySQL, SQL Server)
+class SelfHostedDatabaseConfig(BaseModel):
+    host: str
+    port: int
+    dbname: str
+    username: str
+    password: str
+    ssl: Optional[bool] = None  # Optional for encrypted connections
+
+# Postgres configuration inherits from SelfHostedDatabaseConfig
+class PostgresConfig(SelfHostedDatabaseConfig):
+    pass
+
+# MySQL configuration inherits from SelfHostedDatabaseConfig
+class MySQLConfig(SelfHostedDatabaseConfig):
+    pass
+
+# SQL Server configuration inherits from SelfHostedDatabaseConfig but adds `driver`
+class SQLServerConfig(SelfHostedDatabaseConfig):
+    driver: str  # Specific to SQL Server
+
+# Supabase configuration (managed, API-based)
+class SupabaseConfig(BaseModel):
+    supabase_url: str
+    supabase_key: str
+
+# Unified response model
+class DatabaseConfigResponse(BaseModel):
+    type: Literal["postgresql", "mysql", "sqlserver", "supabase"]
+    config: Union[PostgresConfig, MySQLConfig, SQLServerConfig, SupabaseConfig]
+
+
+@router.get("/get-sql-database")
+async def get_sql_database_endpoint(
+    current_user: User = Depends(get_current_user),
+):
+    """Get Database Config"""
+    if current_user.role != "admin":
+        raise HTTPException(403, "Admin privileges required")
+    
+    try:
+        raw_config = await fetch_sql_db_credentials(current_user.organization_id)
+
+        if not raw_config:
+            raise HTTPException(status_code=404, detail="Database configuration not found")
+
+        # Extract database type
+        db_type = raw_config.get("database_type")
+
+        # Construct the response model based on the database type
+        if db_type == "postgresql":
+            config = PostgresConfig(**raw_config)
+        elif db_type == "mysql":
+            config = MySQLConfig(**raw_config)
+        elif db_type == "sqlserver":
+            config = SQLServerConfig(**raw_config)
+        elif db_type == "supabase":
+            config = SupabaseConfig(**raw_config)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported database type: {db_type}")
+
+        return {
+            "status": "success",
+            "message": "Database Config retrieved successfully",
+            "data": DatabaseConfigResponse(type=db_type, config=config)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
 @router.post("/set-sql-database")
-async def set_sql_database(
+async def set_sql_database_endpoint(
     request: DatabaseConnection,
     current_user: User = Depends(get_current_user),
 ):
@@ -307,7 +380,6 @@ async def set_sql_database(
         return {
             "status": "success",
             "message": f"Connected to {request.database_type} database",
-            "data": response
         }
     
     except HTTPException:
@@ -338,6 +410,51 @@ def setup_main_database(
         "message": f"Updated main database",
     }
 
+# Define a Pydantic model for the credentials
+class SelfHostedApiCredentials(BaseModel):
+    host: Optional[str] = None
+
+class OnlineApiCredentials(BaseModel):
+    api_key: Optional[str] = None
+
+# Define a Pydantic model for the endpoint response
+class LLMApiKeyResponse(BaseModel):
+    provider: Literal["OLLAMA", "GROQ", "GEMINI"]
+    config: Union[SelfHostedApiCredentials, OnlineApiCredentials]
+
+@router.get("/get-llm-api-key")
+async def get_llm_api_key_endpoint(
+    current_user: User = Depends(get_current_user),
+):
+    """Get LLM api key"""
+    if current_user.role != "admin":
+        raise HTTPException(403, "Admin privileges required")
+    
+    try:
+        # Retrieve the API key info from the database
+        raw_config = await fetch_llm_api_key(current_user.organization_id)
+        if not raw_config:
+            raise HTTPException(status_code=404, detail="API key not found")
+        
+        provider = raw_config.get("provider")
+
+        # Construct the response model based on the database type
+        if provider == "OLLAMA":
+            config = SelfHostedApiCredentials(**raw_config)
+        elif provider == "GROQ" or provider == "GEMINI":
+            config = OnlineApiCredentials(**raw_config)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported LLM provider: {provider}")
+
+        return {
+            "status": "success",
+            "message": "LLM Config retrieved successfully",
+            "data": LLMApiKeyResponse(provider=provider, config=config)
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
 @router.post("/set-llm-api-key")
 async def set_llm_api_key_endpoint(
     request: LLMConnection,
@@ -361,7 +478,6 @@ async def set_llm_api_key_endpoint(
         return {
             "status": "success",
             "message": f"Updated {request.provider} api key",
-            "data": response
         }
 
     except HTTPException:

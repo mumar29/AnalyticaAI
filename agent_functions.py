@@ -112,6 +112,7 @@ class UpdateReportRequest(BaseModel):
         return self
 
 def generate_final_response(user_content: str, needs_rag: bool, is_admin: bool) -> LLMResponse:
+    chart_instruction = ' Additionally, if the user requests a chart or graph, ignore the request and say "Is there anything else I can help with?"'
 
     if needs_rag:
         base_prompt = (
@@ -120,9 +121,9 @@ def generate_final_response(user_content: str, needs_rag: bool, is_admin: bool) 
         )
         # If the user is admin, they have highest level access so we exclude the access permissions message.
         access_note = "" if is_admin else ", or insufficient access permissions"
-        system_prompt = base_prompt.format(access_note)
+        system_prompt = base_prompt.format(access_note) + chart_instruction
     else:
-        system_prompt = "You are a helpful assistant"
+        system_prompt = "You are a helpful assistant."
 
     try:
         response_content = generate_completion(system_prompt, user_content, LLMResponse.model_json_schema())
@@ -145,7 +146,6 @@ def generate_title_and_summary(chunk: str, summary_range: str = "1-2") -> Proces
         """
  
     try:
-
         response_content = generate_completion(system_prompt, chunk, ProcessDocument.model_json_schema())
         return ProcessDocument.model_validate_json(response_content)
     
@@ -314,39 +314,59 @@ def select_relevant_documents(documents: List[Document], context: dict) -> Doc_I
 
 def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> TablesRetrieved:
     
+    # system_prompt = f"""
+    #     You are an advanced SQL query optimization assistant with enhanced contextual understanding.
+
+    #     Core Principles:
+    #     1. Go beyond literal user query interpretation.
+    #     2. Infer implicit information needs from the conversation context.
+    #     3. Generate comprehensive, context-rich queries that provide maximum insight.
+    #     4. Prioritize user experience and information depth over minimal query requirements.
+
+    #     Query Generation Strategy:
+    #     - Always include ALL relevant columns that provide meaningful context.
+    #     - Create queries that go beyond minimal requirements, anticipating potential follow-up questions.
+    #     - Prefer a single optimized query that retrieves all required data using joins and table combinations, instead of multiple smaller queries.
+
+    #     Additional Insights Rules:
+    #     - Do not include a table or query if it does not contribute additional value or context.
+
+    #     Database Schema Structure:
+    #     - You are provided with a JSON object containing tables with columns (name->type) and view_access.
+    #     - Note that column types may have an exclamation mark (!) indicating required fields (this can be ignored for querying).
+
+    #     Instructions:
+    #     1. Analyze the full conversation context, including implicit and explicit information needs.
+    #     2. Strictly select only those tables whose columns are essential for answering the query.
+    #     3. If the query involves multiple pieces of information:
+    #     - If the data is related, return a single optimized query that covers all required aspects using joins or table combinations.
+    #     - Create separate queries only if the information cannot be naturally joined.
+    #     4. For each optimized query, generate:
+    #     - **Direct queries:** One or more queries that directly answer the main request, including all implicitly required columns.
+    #     - **Supplementary queries:** Optional additional queries for extra insights or breakdowns, only if they add meaningful value.
+    #     5. In the output, for each query object, include all the table names used.
+
+    #     Ensure that your output is valid JSON according to the provided schema.
+    # """
+
     system_prompt = f"""
-        You are an advanced SQL query optimization assistant with enhanced contextual understanding.
+        You are a SQL query generation assistant. Select relevant tables from schema based on:
 
-        Core Principles:
-        1. Go beyond literal user query interpretation.
-        2. Infer implicit information needs from the conversation context.
-        3. Generate comprehensive, context-rich queries that provide maximum insight.
-        4. Prioritize user experience and information depth over minimal query requirements.
+        SELECTION CRITERIA:
+        • Analyze conversation context thoroughly for both explicit AND IMPLICIT information needs
+        • Choose tables containing columns that provide all the necessary context even if not directly requested
+        • Prioritize complete, informative results with depth over minimal query requirements
 
-        Query Generation Strategy:
-        - Always include ALL relevant columns that provide meaningful context.
-        - Create queries that go beyond minimal requirements, anticipating potential follow-up questions.
-        - Prefer a single optimized query that retrieves all required data using joins and table combinations, instead of multiple smaller queries.
+        QUERY STRATEGY:
+        • Include all implicitly relevant columns that add context or answer potential follow-ups
+        • Prefer single optimized queries with joins over multiple separate queries
+        • Create separate queries only when information cannot be logically joined
 
-        Additional Insights Rules:
-        - Do not include a table or query if it does not contribute additional value or context.
+        OUTPUT:
+        • For each query, list all selected table names
+        • Structure: Direct queries (main answer) + Supplementary queries (additional insights)
 
-        Database Schema Structure:
-        - You are provided with a JSON object containing tables with columns (name->type) and view_access.
-        - Note that column types may have an exclamation mark (!) indicating required fields (this can be ignored for querying).
-
-        Instructions:
-        1. Analyze the full conversation context, including implicit and explicit information needs.
-        2. Strictly select only those tables whose columns are essential for answering the query.
-        3. If the query involves multiple pieces of information:
-        - If the data is related, return a single optimized query that covers all required aspects using joins or table combinations.
-        - Create separate queries only if the information cannot be naturally joined.
-        4. For each optimized query, generate:
-        - **Direct queries:** One or more queries that directly answer the main request, including all implicitly required columns.
-        - **Supplementary queries:** Optional additional queries for extra insights or breakdowns, only if they add meaningful value.
-        5. In the output, for each query object, include all the table names used.
-
-        Ensure that your output is valid JSON according to the provided schema.
+        NOTE: Schema format shows tables with columns (name->type) and view_access. Ignore exclamation marks (!) in column types.
     """
 
     try:
@@ -498,39 +518,33 @@ def infer_missing_headers(csv: str, max_columns: int) -> CSVHeaderCorrection:
 def get_chart_configs(csv_list: List[str], context: dict) -> Optional[ChartConfig]:
 
     system_prompt = f"""
-        You are a data visualization expert. Given conversation context and a list of one or more CSV samples (each assigned an index) representing datasets, your task is to generate VALID chart configurations by following these STRICT RULES:
+        You are a data visualization expert. Generate VALID chart configurations from CSV samples (with indices) according to these PRIORITY RULES:
 
-        1. CHART CREATION:
-            • For EACH valid and relevant CSV:
-                - For **primary charts** (directly related to the user query):
-                    → Always include 1 chart configuration.
-                    → A second primary chart may be included only if the user query requires multiple direct data answers (but never more than 2 primary charts).
-                - For **secondary charts** (supplementary, supporting insights):
-                    → Include these only if they add additional value to the current conversation context.
-            • Choose chart type based on data:
-                → Trends: line/bar
-                → Comparisons: bar/pie
-                → Distributions: histogram (for numerical data)
-                → Frequencies: bar/pie (for categorical counts)
-            • Total chart configuartions across both primary and secondary charts must not be more than 3.
+        1. USER PREFERENCES (HIGHEST PRIORITY):
+            • Honor explicit user requirements when present (chart type, number of charts, columns, comparisons)
+            • If user requests are infeasible, choose closest practical alternative
 
-        2. COLUMN RULES (MUST FOLLOW):
-            ■ Label column (X-axis): 
-                - Categorical/text data (e.g., "Month", "Category")
-                - Unique values (no duplicates)
-            ■ Value column (Y-axis):
-                - Numerical data (e.g., "Sales", "Quantity") OR
-                - Categorical data for counts/frequencies (e.g., "Category" → count occurrences)
-                - MUST be different from label column                
+        2. AUTO CHART SELECTION (WHEN NO USER SPECIFICATIONS):
+            • Primary charts (1-2 max): Directly answer user query
+            • Secondary charts (optional): Only if adding significant value
+            • Data-appropriate chart type: trends→line/bar, comparisons→bar/pie, distributions→bar, frequencies→pie/doughnut
+            • Maximum 3 charts total across primary and secondary
 
-        3. STRICT PROHIBITIONS:
-            ❌ Never use the same column for both label and value.
-            ❌ Never use the same label/value pair in multiple charts.
-            ❌ No imaginary columns - use only what exists.
+        3. MANDATORY COLUMN RULES:
+            • Label column: Categorical/text data with unique values
+            • Value column: Numerical data OR categorical for counts
+            • MUST be different columns for label and value
+
+        4. PROHIBITIONS:
+            • No duplicate column usage for label/value
+            • No reusing same label/value pairs across charts
+            • No imaginary columns - use only what exists.
+
+        5. TOPIC RELEVANCE:
+            • Ensure that the generated chart configurations are aligned with the overall topic and content of the final textual response.
+            • Charts that are thematically related and add visual support to the discussion are acceptable.       
             
-        **Important:** Skip CSVs that don't match user request context and do not contribute additional value or insight to answering the query.
-
-        5. Provide concise, descriptive titles for each chart configuration.
+        Skip irrelevant CSVs (CSVs that don't match user request context) and provide concise chart titles.
     """
 
     try:

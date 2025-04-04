@@ -208,7 +208,6 @@ async def generate_response(state: AgentState):
             "doc_results": {"chunks_text": state["doc_results"]["chunks_text"]} if state.get("doc_results") else {}
         }
 
-
     print("======================================================================")
     print("The final context is \n", context_data)
     print("======================================================================")
@@ -248,6 +247,8 @@ async def generate_response(state: AgentState):
         logger.debug("Collected CSVs: %s", all_csv_list)
 
         await manager.broadcast("Generating visualizations") 
+
+        context_data["context"]["final_textual_response"] = result.content
 
         # Call get_chart_configs with the collected CSV list and the user query.
         chart_configs = get_chart_configs(all_csv_list, context_data) if all_csv_list else None

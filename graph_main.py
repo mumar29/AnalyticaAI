@@ -420,6 +420,7 @@ class OnlineApiCredentials(BaseModel):
 # Define a Pydantic model for the endpoint response
 class LLMApiKeyResponse(BaseModel):
     provider: Literal["OLLAMA", "GROQ", "GEMINI"]
+    model: Optional[str] = None
     config: Union[SelfHostedApiCredentials, OnlineApiCredentials]
 
 @router.get("/get-llm-api-key")
@@ -437,6 +438,7 @@ async def get_llm_api_key_endpoint(
             raise HTTPException(status_code=404, detail="API key not found")
         
         provider = raw_config.get("provider")
+        model = raw_config.get("model")
 
         # Construct the response model based on the database type
         if provider == "OLLAMA":
@@ -449,7 +451,7 @@ async def get_llm_api_key_endpoint(
         return {
             "status": "success",
             "message": "LLM Config retrieved successfully",
-            "data": LLMApiKeyResponse(provider=provider, config=config)
+            "data": LLMApiKeyResponse(provider=provider, model=model , config=config)
         }
     
     except Exception as e:
@@ -959,7 +961,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
         "graph_main:app",
-        host="192.168.0.101",
+        host="0.0.0.0",
         port=port,
         log_config=None,  # Disable default uvicorn logs
         reload=False  # Disable reload on Windows

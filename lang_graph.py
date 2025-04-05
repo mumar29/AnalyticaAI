@@ -5,10 +5,10 @@ from fastapi import HTTPException
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, Optional, List
 from langchain_core.messages import HumanMessage, AIMessage
+from database_provider import DatabaseProvider
 from redis_config import get_redis_client
-
 from agent_functions import classify_user_input, generate_final_response, get_chart_configs, refine_query, select_relevant_documents, select_relevant_sql_tables
-from database_functions import get_database_schema, get_filtered_schema, get_or_create_conversation_session_and_history, retrieve_all_documents, retrieve_chunks_tables, retrieve_relevant_chunks, save_conversation_messages
+from database_functions import get_database_schema_for_connection, get_filtered_schema_for_connection, get_or_create_conversation_session_and_history, retrieve_all_documents, retrieve_chunks_tables, retrieve_relevant_chunks, save_conversation_messages
 from logging_config import logger
 from utils import execute_query, json_default, list_dict_to_csv, simplify_messages, update_conversation_summary_incremental
 from websocket_manager import manager
@@ -70,10 +70,22 @@ workflow.add_node("router", route_query)
 async def process_sql(state: AgentState):
     if state["data_source"] in ["both", "sql"]:
         logger.info("Processing SQL query for: %s", state["user_input"])
-        schema = await get_filtered_schema(state["org_id"], state["user_role"])
+        
+        # Retrieve all active connections for this organization.
+        connections = DatabaseProvider.get_connections(state["org_id"])
+        if not connections:
+            raise ConnectionError("No active database connections found for the organization.")
 
+        # Retrieve schemas for all connections.
+        schemas = {}
+        for connection_id in connections.keys():
+            schema = await get_filtered_schema_for_connection(state["org_id"], connection_id, state["user_role"])
+            schemas[connection_id] = schema
+
+        # Broadcast progress (optional).
         await manager.broadcast("Identifying relevant SQL tables and generating SQL queries") 
 
+        # Build context for query generation.
         context = {
             "current_user_query": state["user_input"],
             "context": (
@@ -86,47 +98,58 @@ async def process_sql(state: AgentState):
             )
         }
 
-        tables = select_relevant_sql_tables(schema, context)
-        logger.debug("SQL queries generated for tables: %s", tables)
+        # Initialize a list to store results.
+        results_list = []
 
-        results = []
-        for table in tables.tables:
-            table_result = {
-                "tables_involved": table.tables_involved,
-                "primary_data": [],
-                "supplementary_data": []
-            }
+        # For each connection, generate and execute queries.
+        for connection_id, schema in schemas.items():
+            logger.debug("Generating SQL queries for connection %s", connection_id)
+            
+            tables = select_relevant_sql_tables(schema, context)
+            connection_results = []
+            for table in tables.tables:
+                table_result = {
+                    "tables_involved": table.tables_involved,
+                    "primary_data": [],
+                    "supplementary_data": []
+                }
 
-            # Execute direct (primary) queries
-            for query in table.direct_queries:
-                try:
-                    logger.debug("Executing direct SQL query for tables %s: %s", table.tables_involved, query)
-                    query_result = execute_query(query)
-                    csv_result = list_dict_to_csv(query_result)
-                    logger.debug("Direct SQL query result: %s", csv_result)
-                    table_result["primary_data"].append(csv_result)
-                except Exception as e:
-                    logger.exception("Error executing direct SQL query for tables %s: %s", table.tables_involved, query)
-
-            # Execute supplementary queries
-            if table.supplementary_queries:
-                for query in table.supplementary_queries:
+                # Execute direct (primary) queries.
+                for query in table.direct_queries:
                     try:
-                        logger.debug("Executing supplementary SQL query for tables %s: %s", table.tables_involved, query)
-                        query_result = execute_query(query)
+                        logger.debug("Executing direct SQL query on connection %s for tables %s: %s", connection_id, table.tables_involved, query)
+                        query_result = execute_query(query, connection_id)
                         csv_result = list_dict_to_csv(query_result)
-                        logger.debug("Supplementary SQL query result: %s", csv_result)
-                        table_result["supplementary_data"].append(csv_result)
+                        logger.debug("Direct SQL query result on connection %s: %s", connection_id, csv_result)
+                        table_result["primary_data"].append(csv_result)
                     except Exception as e:
-                        logger.exception("Error executing supplementary SQL query for tables %s: %s", table.tables_involved, query)
+                        logger.exception("Error executing direct SQL query on connection %s for tables %s: %s", connection_id, table.tables_involved, query)
 
-            results.append(table_result)
+                # Execute supplementary queries.
+                if table.supplementary_queries:
+                    for query in table.supplementary_queries:
+                        try:
+                            logger.debug("Executing supplementary SQL query on connection %s for tables %s: %s", connection_id, table.tables_involved, query)
+                            query_result = execute_query(query, connection_id)
+                            csv_result = list_dict_to_csv(query_result)
+                            logger.debug("Supplementary SQL query result on connection %s: %s", connection_id, csv_result)
+                            table_result["supplementary_data"].append(csv_result)
+                        except Exception as e:
+                            logger.exception("Error executing supplementary SQL query on connection %s for tables %s: %s", connection_id, table.tables_involved, query)
+
+                connection_results.append(table_result)
+            
+            # Append an object with the database name and its query results.
+            results_list.append({
+                "database": connection_id,
+                "query_results": connection_results
+            })
 
         print("======================================================================")
-        print("The final sql results are \n", {"sql_results": results if results else None})
+        print("The final SQL results are \n", {"sql_results": results_list if results_list else None})
         print("======================================================================")
 
-        return {"sql_results": results if results else None}
+        return {"sql_results": results_list if results_list else None}
     return {"sql_results": None}
 
 workflow.add_node("sql_processor", process_sql)
@@ -228,17 +251,21 @@ async def generate_response(state: AgentState):
 
         all_csv_list = []
 
-        # Process SQL results from the updated structure (sql_results is a list)
+        # Process SQL results from the updated structure (sql_results is now a list)
         if state.get("sql_results"):
-            for table in state["sql_results"]:
-                # Add primary data (direct queries) CSV strings
-                for csv_str in table.get("primary_data", []):
-                    if csv_str:
-                        all_csv_list.append(csv_str)
-                # Add supplementary data CSV strings
-                for csv_str in table.get("supplementary_data", []):
-                    if csv_str:
-                        all_csv_list.append(csv_str)
+            # state["sql_results"] is now a list of objects
+            for sql_result in state["sql_results"]:
+                db_name = sql_result.get("database")
+                logger.info("Processing results for database: %s", db_name)
+                for table in sql_result.get("query_results", []):
+                    # Add primary data CSV strings
+                    for csv_str in table.get("primary_data", []):
+                        if csv_str:
+                            all_csv_list.append(csv_str)
+                    # Add supplementary data CSV strings
+                    for csv_str in table.get("supplementary_data", []):
+                        if csv_str:
+                            all_csv_list.append(csv_str)
 
         # Add CSV strings from document processing
         if state.get("doc_results") and state["doc_results"].get("chunk_tables"):
@@ -329,11 +356,10 @@ async def handle_query(user_input: str, user_id: int, org_id: str, user_role: st
 
     result = await app.ainvoke(initial_state)
 
-    print("Got generate_response node result")
-
+    final_response_data = result["final_response"]  # Extract the dictionary
     # Build context data from the workflow for potential report generation
     context_data = {
-        "user_query": user_input,
+        "current_user_query": user_input,
         "context": {
             **(
                 {
@@ -351,6 +377,10 @@ async def handle_query(user_input: str, user_id: int, org_id: str, user_role: st
                         "doc_results": {"chunks_text": result["doc_results"]["chunks_text"]} if result.get("doc_results") else {}                    }
                 }
             )
+        },
+        "current_AI_response": {
+            "text_response": result["final_response"]["text_response"],
+            "chart_configs": final_response_data["chart_configs"].model_dump() if final_response_data["chart_configs"] else None
         }
     }
 
@@ -359,8 +389,6 @@ async def handle_query(user_input: str, user_id: int, org_id: str, user_role: st
     request_key = f"user:{user_id}:request:{request_id}"
     redis_client.set(request_key, json.dumps(context_data), ex=3600)
     
-    final_response_data = result["final_response"]  # Extract the dictionary
-
     messages = [
         {
             "conversation_id": session_id,

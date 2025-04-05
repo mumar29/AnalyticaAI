@@ -26,9 +26,9 @@ class ProcessedChunk:
 # Define the database connection configuration model.
 class DatabaseConnection(BaseModel):
     database_type: Literal["postgresql", "mysql", "sqlserver", "supabase"]
+    dbname: str = Field(..., description="Database name")
     host: Optional[str] = Field(default=None, description="Database server host")
     port: Optional[int] = Field(default=None, description="Database server port")
-    dbname: Optional[str] = Field(default=None, description="Database name")
     username: Optional[str] = Field(default=None, description="Database username")
     password: Optional[str] = Field(default=None, description="Database password")
     ssl: Optional[bool] = Field(default=None, description="Use SSL for secure connections")
@@ -43,7 +43,7 @@ class DatabaseConnection(BaseModel):
             if missing:
                 raise ValueError(f"Missing required fields for Supabase: {', '.join(missing)}")
         else:
-            missing = [field for field in ["host", "dbname", "username", "password"] if not getattr(self, field)]
+            missing = [field for field in ["host", "username", "password"] if not getattr(self, field)]
             if missing:
                 raise ValueError(f"Missing required fields for {self.database_type} database: {', '.join(missing)}")
             if self.database_type == "sqlserver" and not self.driver:

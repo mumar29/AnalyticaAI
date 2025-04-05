@@ -13,7 +13,7 @@ from utils import execute_query
 ALLOWED_LLM_PROVIDERS = {"GROQ", "GEMINI", "OLLAMA"}
 ALLOWED_DB_PROVIDERS = {"postgresql", "mysql", "sqlserver", "supabase"}
 
-async def set_sql_db_credentials(org_id: str, credentials: DatabaseConnection) -> Dict[str, Any]:
+async def add_sql_db_credentials(org_id: str, credentials: DatabaseConnection) -> Dict[str, Any]:
     """Update or insert the database credentials for a given organization."""
     if credentials.database_type not in ALLOWED_DB_PROVIDERS:
         return {
@@ -26,24 +26,43 @@ async def set_sql_db_credentials(org_id: str, credentials: DatabaseConnection) -
         data = {
             "organization_id": org_id,
             "database_type": credentials.database_type,
+            "dbname": credentials.dbname,
             "host": credentials.host,
             "port": credentials.port,
-            "dbname": credentials.dbname,
             "username": credentials.username,
-            "password": credentials.password,  # Ensure this is secured properly!
+            "password": credentials.password,
             "ssl": credentials.ssl,
             "supabase_url": credentials.supabase_url,
             "supabase_key": credentials.supabase_key,
             "driver": credentials.driver
         }
         # Use upsert abstraction (note: upsert returns one record if successful)
-        result = provider.upsert("database_credentials", data, on_conflict=["organization_id"])
+        result = provider.upsert("database_credentials", data, on_conflict=["organization_id", "dbname"])
         if result:
             return {"success": True, "message": f"{credentials.database_type} credentials updated successfully"}
         else:
             return {"success": False, "message": "Failed to update credentials"}
     except Exception as e:
         return {"success": False, "message": f"Database error while updating credentials: {str(e)}"}
+
+async def delete_sql_db_credentials(org_id: str, dbname: str) -> Dict[str, Any]:
+    """Delete the database credentials for a given organization and dbname."""
+    try:
+        provider = DatabaseService.get_instance()
+        
+        # Delete using the composite key: organization_id and dbname.
+        result = provider.delete(
+            table="database_credentials", 
+            match_criteria={"organization_id": org_id, "dbname": dbname}
+        )
+        
+        if result:
+            return {"success": True, "message": "Database credentials removed successfully"}
+        else:
+            return {"success": False, "message": "No matching database credentials found"}
+    
+    except Exception as e:
+        return {"success": False, "message": f"Database error while removing credentials: {str(e)}"}
 
 async def set_llm_api_key(org_id: str, llm_credentials: LLMConnection) -> Dict[str, Any]:
     """Update the API key in the database and set it as an environment variable."""
@@ -70,7 +89,7 @@ async def set_llm_api_key(org_id: str, llm_credentials: LLMConnection) -> Dict[s
     except Exception as e:
         return {"success": False, "message": f"Database error while updating API key: {str(e)}"}
 
-async def fetch_sql_db_credentials(org_id: str) -> Optional[Dict[str, Any]]:
+async def fetch_sql_db_credentials(org_id: str) -> Optional[List[Dict[str, Any]]]:
     """Retrieve the API key for a given user ID from Supabase."""
     try:
         provider = DatabaseService.get_instance()
@@ -79,7 +98,7 @@ async def fetch_sql_db_credentials(org_id: str) -> Optional[Dict[str, Any]]:
             columns=["*"], 
             filters={"organization_id": org_id}
         )
-        return results[0] if results else None
+        return results if results else None
     except Exception:
         return None
 
@@ -110,7 +129,7 @@ def execute_sql_query(query: str) -> Optional[List[dict]]:
     except Exception as e:
         raise e
 
-async def get_database_schema():
+async def get_database_schema_for_connection(connection_id: str):
     query = """
         SELECT 
             c.table_name, 
@@ -139,7 +158,7 @@ async def get_database_schema():
         ORDER BY c.table_name, c.ordinal_position
     """
     
-    response_data = execute_query(query)
+    response_data = execute_query(query, connection_id)
 
     if response_data is None:
         return {"tables": {}}
@@ -165,22 +184,22 @@ async def get_database_schema():
         schema[table_name]["columns"][column_name] = f"{short_type}{nullability}"
     return {"tables": schema}
 
-async def get_filtered_schema(organization_id: int, access_level: str = "member") -> dict:
+async def get_filtered_schema_for_connection(organization_id: int, connection_id: str, access_level: str = "member") -> dict:
     access_hierarchy = {"member": 1, "manager": 2, "admin": 3}
-    schema = await get_database_schema()
+    schema = await get_database_schema_for_connection(connection_id)
     dynamic_tables = set(schema.get("tables", {}).keys())
     
-    control_entries = await get_control_tables(organization_id)
+    control_entries = await get_control_tables(organization_id, connection_id)
     control_tables = set(entry["table_name"] for entry in (control_entries or []))
     
     new_tables = dynamic_tables - control_tables
     if new_tables:
-        entries = [{"organization_id": organization_id, "table_name": table} for table in new_tables]
+        entries = [{"organization_id": organization_id, "dbname": connection_id, "table_name": table} for table in new_tables]
         await insert_control_tables(entries)
     
     stale_tables = control_tables - dynamic_tables
     if stale_tables:
-        await delete_control_tables(organization_id, list(stale_tables))
+        await delete_control_tables(organization_id, connection_id ,list(stale_tables))
     
     control_lookup = {entry["table_name"]: entry["access_level"] for entry in (control_entries or [])}
     filtered_schema = schema.copy()
@@ -514,7 +533,7 @@ async def create_user(org_id: int, user_name: str, user_email: str, user_passwor
         print(f"Error creating user: {e}")
         return None
 
-async def get_control_tables(organization_id: int) -> Optional[List[dict]]:
+async def get_control_tables(organization_id: int, connection_id: str) -> Optional[List[dict]]:
     """
     Retrieve all control entries for a given organization.
     """
@@ -523,7 +542,7 @@ async def get_control_tables(organization_id: int) -> Optional[List[dict]]:
         results = provider.select(
             table="database_access_control",
             columns=["id", "table_name", "access_level"],
-            filters={"organization_id": organization_id}
+            filters={"organization_id": organization_id, "dbname": connection_id},
         )
         return results if results else None
     except Exception as e:
@@ -542,7 +561,7 @@ async def insert_control_tables(new_tables: list):
         print(f"Error inserting control tables: {e}")
         return None
 
-async def delete_control_tables(organization_id: int, table_names: list):
+async def delete_control_tables(organization_id: int, connection_id: str, table_names: list):
     """
     Delete multiple control entries.
     """
@@ -550,14 +569,14 @@ async def delete_control_tables(organization_id: int, table_names: list):
         provider = DatabaseService.get_instance()
         results = provider.delete(
             table="database_access_control",
-            match_criteria={"organization_id": organization_id, "table_name": table_names}
+            match_criteria={"organization_id": organization_id, "dbname": connection_id, "table_name": table_names}
         )
         return results if results else None
     except Exception as e:
         print(f"Error deleting control entries: {e}")
         return None
 
-async def update_control_table_access(organization_id: int, table_name: str, new_access_level: str):
+async def update_control_table_access(organization_id: int, connection_id: str, table_name: str, new_access_level: str):
     """
     Update the access level of a specific table for a given organization.
     """
@@ -566,7 +585,7 @@ async def update_control_table_access(organization_id: int, table_name: str, new
         result = provider.update(
             "database_access_control",
             {"access_level": new_access_level},
-            {"organization_id": organization_id, "table_name": table_name}
+            {"organization_id": organization_id, "dbname": connection_id, "table_name": table_name}
         )
         return result if result else None
     except Exception as e:
@@ -617,6 +636,39 @@ async def get_created_users(organization_id: int):
             filters={"organization_id": organization_id}
         )
         return result if result else None
+    
     except Exception as e:
         print(f"Error retrieving users for organization {organization_id}: {e}")
+        return None
+    
+async def delete_user_from_organization(organization_id: int, user_id: int):
+    """Delete a user from the organization."""
+    try:
+        provider = DatabaseService.get_instance()
+
+        result = provider.delete(
+            table="users",
+            match_criteria={"organization_id": organization_id, "id": user_id}
+        )
+        
+        return result if result else None
+
+    except Exception as e:
+        print(f"Error deleting user with ID {user_id} from organization {organization_id}: {e}")
+        return None
+
+async def delete_processed_document(organization_id: int, document_id: int):
+    """Delete a document from the organization."""
+    try:
+        provider = DatabaseService.get_instance()
+
+        result = provider.delete(
+            table="md_documents",
+            match_criteria={"organization_id": organization_id, "document_id": document_id}
+        )
+        
+        return result if result else None
+
+    except Exception as e:
+        print(f"Error deleting document {document_id} from organization {organization_id}: {e}")
         return None

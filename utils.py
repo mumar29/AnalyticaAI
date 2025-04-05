@@ -1,8 +1,10 @@
+import base64
 import csv
 import io
 import os
 from urllib.parse import urlparse
 import uuid
+from matplotlib import pyplot as plt
 import psycopg2
 from typing import List, Dict, Optional
 from context_storage import CURRENT_ORG_ID
@@ -320,15 +322,75 @@ def execute_sql_file(sql_file_path, db_url):
     except Exception as e:
         return {"status": "error", "message": f"Database setup failed: {str(e)}"}
 
-# Convenience function for executing queries.
-def execute_query(query: str, params: Optional[dict] = None) -> Optional[List[dict]]:
-    """
-    Convenience function that delegates to DatabaseProvider.execute_query
-    """
-    
-    org_id = CURRENT_ORG_ID.get()
 
-    return DatabaseProvider.execute_query(org_id, query, params)
+def generate_charts_images(chart_configs: dict) -> list:
+    """
+    Process the ChartConfig to generate chart images.
+    Returns a list of dicts with metadata, e.g.:
+      [{"title": "Sales Over Time", "chart_type": "line", "image_base64": "..."},
+       ...]
+    """
+    images = []
+    # Assume chart_configs has a structure that conforms to ChartConfig
+    csv_collection = chart_configs.get("csv_collection", {}).get("csvs", [])
+    
+    # Create a mapping of csv_index -> CSV content for quick lookup.
+    csv_data = {csv["csv_index"]: csv["content"] for csv in csv_collection}
+    
+    for chart in chart_configs.get("primary_charts", []):
+        # Retrieve CSV content for the chart based on the index
+        csv_index = chart.get("csv_index")
+        csv_content = csv_data.get(csv_index)
+        
+        if csv_content:
+            # Parse CSV data as needed; this is an example assuming pandas
+            import pandas as pd
+            from io import StringIO
+
+            df = pd.read_csv(StringIO(csv_content))
+            mapping = chart.get("mapping", {})
+            label_col = mapping.get("label_column")
+            value_col = mapping.get("value_column")
+
+            # Plot based on chart type
+            plt.figure(figsize=(6, 4))
+            chart_type = chart.get("type")
+            title = chart.get("title", "Chart")
+            
+            if chart_type == "bar":
+                plt.bar(df[label_col], df[value_col])
+            elif chart_type == "line":
+                plt.plot(df[label_col], df[value_col])
+            elif chart_type == "pie":
+                plt.pie(df[value_col], labels=df[label_col], autopct="%1.1f%%")
+            # Add other chart types as necessary
+
+            plt.title(title)
+            plt.tight_layout()
+            
+            # Save image to a bytes buffer
+            buf = io.BytesIO()
+            plt.savefig(buf, format="png")
+            plt.close()
+            buf.seek(0)
+            image_base64 = base64.b64encode(buf.read()).decode("utf-8")
+            
+            images.append({
+                "title": title,
+                "chart_type": chart_type,
+                "image_base64": image_base64,
+                "mapping:": mapping,
+            })
+    return images
+
+# Convenience function for executing queries.
+def execute_query(query: str, connection_id: str, params: Optional[dict] = None) -> Optional[List[dict]]:
+    """
+    Convenience function that delegates to DatabaseProvider.execute_query.
+    """
+    org_id = CURRENT_ORG_ID.get()
+    
+    return DatabaseProvider.execute_query(org_id, connection_id, query, params)
 
 # At the module level, after your LLMProvider class
 def generate_completion(system_prompt: str, user_content: str, response_schema: dict) -> str:

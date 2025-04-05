@@ -90,20 +90,24 @@ CREATE TABLE IF NOT EXISTS md_tables (
 
 CREATE TABLE IF NOT EXISTS database_access_control (
     id BIGSERIAL PRIMARY KEY,
-    organization_id BIGINT REFERENCES organizations(id) ON DELETE CASCADE,
+    organization_id BIGINT,
+    dbname TEXT,
     table_name VARCHAR NOT NULL,
     access_level VARCHAR NOT NULL DEFAULT 'member',
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    UNIQUE (organization_id, table_name)  -- Ensures each table has one access entry per organization
+    UNIQUE (organization_id, dbname, table_name),
+    FOREIGN KEY (organization_id, dbname)
+        REFERENCES database_credentials(organization_id, dbname)
+        ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS database_credentials (
     id BIGSERIAL PRIMARY KEY,
-    organization_id BIGINT UNIQUE REFERENCES organizations(id) ON DELETE CASCADE,
+    organization_id BIGINT REFERENCES organizations(id) ON DELETE CASCADE,
     database_type TEXT NOT NULL CHECK (database_type IN ('postgresql', 'mysql', 'sqlserver', 'supabase')),
+    dbname TEXT NOT NULL,
     host TEXT,
     port INTEGER,
-    dbname TEXT,
     username TEXT,
     password TEXT, -- Consider encrypting this before storing
     ssl BOOLEAN DEFAULT TRUE,
@@ -111,6 +115,7 @@ CREATE TABLE IF NOT EXISTS database_credentials (
     supabase_key TEXT,
     driver TEXT,
     created_at TIMESTAMP DEFAULT now()
+    UNIQUE (organization_id, dbname)
 );
 
 CREATE OR REPLACE FUNCTION update_total_messages()

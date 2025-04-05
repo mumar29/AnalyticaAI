@@ -9,7 +9,7 @@ from llama_parse import LlamaParse
 from llama_index.core import SimpleDirectoryReader
 from chunk_md import chunk_markdownv2, process_chunk, process_document, store_chunk
 from crawler import crawl_website
-from database_functions import get_database_schema
+from database_functions import get_database_schema_for_connection
 from dotenv import load_dotenv
 
 load_dotenv()

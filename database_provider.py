@@ -12,41 +12,58 @@ class DatabaseProvider:
     """
     Database provider that supports multiple connections, keyed by organization id.
     """
-    # Map org_id -> (DatabaseConnection, connection instance, connection hash)
-    _connections: Dict[int, Tuple[DatabaseConnection, Any, str]] = {}
+    # org_id -> { connection_id: (DatabaseConnection, connection instance, connection hash) }
+    _connections: Dict[int, Dict[str, Tuple[DatabaseConnection, Any, str]]] = {}
+
+    @classmethod
+    def get_connections(cls, org_id: int) -> Dict[str, Any]:
+        """
+        Returns a dictionary mapping connection identifiers to the connection instances for a given organization.
+        """
+        if org_id not in cls._connections:
+            return {}
+        # Return just the connection instance for each connection_id.
+        return {conn_id: connection_info[1] for conn_id, connection_info in cls._connections[org_id].items()}
 
     @classmethod
     async def get_or_initialize(cls, org_id: int) -> Any:
         """
-        Retrieve the connection for the given organization.
-        If the connection does not exist, fetch the config and initialize it.
+        Retrieve the connections for the given organization.
+        If connections do not exist, fetch the config list and initialize them.
         """
         if org_id in cls._connections:
-            return cls._connections[org_id][1]
-
+            return cls._connections[org_id]
+        
         from database_functions import fetch_sql_db_credentials
-        # Fetch configuration as a dict
-        raw_config = await fetch_sql_db_credentials(org_id)
-        if not raw_config:
+        raw_configs = await fetch_sql_db_credentials(org_id)
+        if not raw_configs:
             raise ConnectionError(f"Database configuration not found for organization {org_id}")
 
-        # Convert the dict to a DatabaseConnection instance
-        try:
-            config = DatabaseConnection(**raw_config)
-        except Exception as e:
-            raise ValueError(f"Invalid database configuration for organization {org_id}: {str(e)}") from e
-
-        cls.initialize(org_id, config)
-        return cls._connections[org_id][1]
+        # Expecting raw_configs to be a list of dictionaries
+        connections = {}
+        for raw_config in raw_configs:
+            try:
+                config = DatabaseConnection(**raw_config)
+            except Exception as e:
+                raise ValueError(f"Invalid database configuration for organization {org_id}: {str(e)}") from e
+                        
+            cls.initialize(org_id, config)
+            connection_id = config.dbname  # or config.alias if provided
+            connections[connection_id] = cls._connections[org_id][connection_id]
+        
+        return cls._connections[org_id]
 
     @classmethod
     def initialize(cls, org_id: int, config: DatabaseConnection):
         """Set up the database connection using validated configuration."""
         new_hash = cls._generate_config_hash(config)
+        if org_id not in cls._connections:
+            cls._connections[org_id] = {}
 
-        # If a connection exists for this org, check if it's still valid.
-        if org_id in cls._connections:
-            _, _, existing_hash = cls._connections[org_id]
+        connection_id = config.dbname
+        # If a connection exists for this connection_id, check if it is still valid.
+        if connection_id in cls._connections[org_id]:
+            _, _, existing_hash = cls._connections[org_id][connection_id]
             if new_hash == existing_hash:
                 return  # Connection is current; no need to reinitialize
 
@@ -62,31 +79,30 @@ class DatabaseProvider:
             elif config.database_type == "supabase":
                 new_connection = cls._create_supabase_client(config)
 
-            # Test the new connection.
             cls._test_connection(new_connection, config.database_type)
 
-            # If an old connection exists, close it.
-            if org_id in cls._connections:
-                _, old_connection, _ = cls._connections[org_id]
+            # Close existing connection if present.
+            if connection_id in cls._connections[org_id]:
+                _, old_connection, _ = cls._connections[org_id][connection_id]
                 try:
                     old_connection.close()
                 except Exception:
                     pass
 
-            # Store the new connection.
-            cls._connections[org_id] = (config, new_connection, new_hash)
+            cls._connections[org_id][connection_id] = (config, new_connection, new_hash)
 
         except Exception as e:
             if new_connection and hasattr(new_connection, "close"):
-                new_connection.close()  # Clean up if initialization fails.
-            raise ConnectionError(f"Connection failed for org {org_id}: {str(e)}") from e
+                new_connection.close()
+            raise ConnectionError(f"Connection failed for org {org_id}, connection {connection_id}: {str(e)}") from e
+
 
     @classmethod
-    def execute_query(cls, org_id: int, query: str, params: Optional[dict] = None) -> Optional[List[dict]]:
-        """Execute a query using the connection for the given organization."""
-        if org_id not in cls._connections:
-            raise ConnectionError("Database connection not initialized for organization")
-        _, connection, _ = cls._connections[org_id]
+    def execute_query(cls, org_id: int, connection_id: str, query: str, params: Optional[dict] = None) -> Optional[List[dict]]:
+        """Execute a query using the connection for the given organization and connection identifier."""
+        if org_id not in cls._connections or connection_id not in cls._connections[org_id]:
+            raise ConnectionError("Database connection not initialized for organization or specified connection_id")
+        _, connection, _ = cls._connections[org_id][connection_id]
 
         try:
             if isinstance(connection, Client):  # Supabase client
@@ -106,7 +122,7 @@ class DatabaseProvider:
         except Exception as e:
             if not isinstance(connection, Client):
                 connection.rollback()
-            raise RuntimeError(f"Query execution failed for org {org_id}: {str(e)}") from e
+            raise RuntimeError(f"Query execution failed for org {org_id}, connection {connection_id}: {str(e)}") from e
         finally:
             if not isinstance(connection, Client) and 'cursor' in locals():
                 cursor.close()

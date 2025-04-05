@@ -27,9 +27,9 @@ from lang_graph import handle_query
 from llm_provider import LLMConnection, LLMProvider
 from logging_config import logger
 from models import DatabaseConnection
-from database_functions import create_user, fetch_sql_db_credentials, get_control_documents, get_control_tables, get_created_users, get_user, register_organization, set_llm_api_key, fetch_llm_api_key, get_conversation_messages, get_database_schema, get_user_conversations, set_sql_db_credentials, update_control_table_access, update_document_access
+from database_functions import create_user, delete_processed_document, delete_sql_db_credentials, delete_user_from_organization, fetch_sql_db_credentials, get_control_documents, get_control_tables, get_created_users, get_user, register_organization, set_llm_api_key, fetch_llm_api_key, get_conversation_messages, get_database_schema_for_connection, get_user_conversations, add_sql_db_credentials, update_control_table_access, update_document_access
 from main_supabase_provider import MainSupabaseProvider
-from utils import execute_query, get_website_identifier, json_default, list_dict_to_csv, normalize_url, save_credentials_to_env
+from utils import execute_query, generate_charts_images, get_website_identifier, json_default, list_dict_to_csv, normalize_url, save_credentials_to_env
 from websocket_manager import manager
 from redis_config import get_redis_client
 
@@ -110,13 +110,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allows requests from any origin
     allow_credentials=True,
-    allow_methods=["GET", "POST"],  # Allowed HTTP methods
-    allow_headers=[
-        "Content-Type",
-        "Authorization",
-        "Access-Control-Allow-Headers",
-        "Access-Control-Allow-Origin"
-    ],  # Allowed headers
+    allow_methods=["*"],  # Allowed HTTP methods
+    allow_headers=["*"],  # Allowed headers
 )
 
 # Security
@@ -131,7 +126,11 @@ async def validate_api_key(api_key: str = Depends(api_key_header)):
 class QueryRequest(BaseModel):
     text: str
 
+class GetTableAccessRequest(BaseModel):
+    db_name: str
+
 class UpdateTableAccessRequest(BaseModel):
+    db_name: str
     table_name: str
     access_level: Literal["admin", "manager", "member"]
 
@@ -290,7 +289,6 @@ async def create_user_endpoint(
 class SelfHostedDatabaseConfig(BaseModel):
     host: str
     port: int
-    dbname: str
     username: str
     password: str
     ssl: Optional[bool] = None  # Optional for encrypted connections
@@ -315,42 +313,45 @@ class SupabaseConfig(BaseModel):
 # Unified response model
 class DatabaseConfigResponse(BaseModel):
     type: Literal["postgresql", "mysql", "sqlserver", "supabase"]
+    dbname: str
     config: Union[PostgresConfig, MySQLConfig, SQLServerConfig, SupabaseConfig]
-
 
 @router.get("/get-sql-database")
 async def get_sql_database_endpoint(
     current_user: User = Depends(get_current_user),
 ):
-    """Get Database Config"""
+    """Get Database Config(s) for the organization"""
     if current_user.role != "admin":
         raise HTTPException(403, "Admin privileges required")
     
     try:
-        raw_config = await fetch_sql_db_credentials(current_user.organization_id)
+        raw_configs = await fetch_sql_db_credentials(current_user.organization_id)
 
-        if not raw_config:
+        if not raw_configs:
             raise HTTPException(status_code=404, detail="Database configuration not found")
 
-        # Extract database type
-        db_type = raw_config.get("database_type")
-
-        # Construct the response model based on the database type
-        if db_type == "postgresql":
-            config = PostgresConfig(**raw_config)
-        elif db_type == "mysql":
-            config = MySQLConfig(**raw_config)
-        elif db_type == "sqlserver":
-            config = SQLServerConfig(**raw_config)
-        elif db_type == "supabase":
-            config = SupabaseConfig(**raw_config)
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported database type: {db_type}")
-
+        response_configs = []
+        for raw_config in raw_configs:
+            db_type = raw_config.get("database_type")
+            db_name = raw_config.get("dbname")
+            if db_type == "postgresql":
+                config = PostgresConfig(**raw_config)
+            elif db_type == "mysql":
+                config = MySQLConfig(**raw_config)
+            elif db_type == "sqlserver":
+                config = SQLServerConfig(**raw_config)
+            elif db_type == "supabase":
+                config = SupabaseConfig(**raw_config)
+            else:
+                # Optionally, you can skip unsupported types or raise an error.
+                raise HTTPException(status_code=400, detail=f"Unsupported database type: {db_type}")
+            
+            response_configs.append(DatabaseConfigResponse(type=db_type, dbname=db_name, config=config))
+        
         return {
             "status": "success",
-            "message": "Database Config retrieved successfully",
-            "data": DatabaseConfigResponse(type=db_type, config=config)
+            "message": "Database Config(s) retrieved successfully",
+            "data": response_configs
         }
 
     except HTTPException:
@@ -358,8 +359,8 @@ async def get_sql_database_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
-@router.post("/set-sql-database")
-async def set_sql_database_endpoint(
+@router.post("/add-sql-database")
+async def add_sql_database_endpoint(
     request: DatabaseConnection,
     current_user: User = Depends(get_current_user),
 ):
@@ -372,7 +373,7 @@ async def set_sql_database_endpoint(
         # Initialize database provider with validated request data
         DatabaseProvider.initialize(current_user.organization_id, request)
 
-        response = await set_sql_db_credentials(current_user.organization_id, request)
+        response = await add_sql_db_credentials(current_user.organization_id, request)
         
         if not response.get("success"):
             raise HTTPException(status_code=500, detail="Failed to save database config")
@@ -387,6 +388,32 @@ async def set_sql_database_endpoint(
     
     except ConnectionError as e:
         raise HTTPException(status_code=400, detail=f"SQL database initialization failed: {str(e)}")
+    
+    except Exception as e:
+        return {"status": 500, "message": f"Unexpected error: {str(e)}"}
+
+@router.delete("/remove-sql-database/{dbname}")
+async def remove_sql_database_endpoint(
+    dbname: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Remove SQL database credentials for a given organization and dbname."""
+    if current_user.role != "admin":
+        raise HTTPException(403, "Admin privileges required")
+    
+    try:
+        response = await delete_sql_db_credentials(current_user.organization_id, dbname)
+        
+        if not response.get("success"):
+            raise HTTPException(status_code=500, detail="Failed to remove database config")
+        
+        return {
+            "status": "success",
+            "message": f"Removed SQL database credentials for '{dbname}'.",
+        }
+    
+    except HTTPException:
+        raise
     
     except Exception as e:
         return {"status": 500, "message": f"Unexpected error: {str(e)}"}
@@ -630,7 +657,7 @@ async def get_company_health_endpoint(
             cached_data = json.loads(cached_response)
             return PerformanceReportResponse(**cached_data)
 
-        schema = await get_database_schema()
+        schema = await get_database_schema_for_connection()
         tables = schema.get("tables", schema)
         
         # Generate KPI SQL queries using the provided schema tables
@@ -689,7 +716,17 @@ async def get_company_health_endpoint(
         logger.error(f"Health Retrieval failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/generate-report/{request_id}", response_model=Report)
+class ChartImage(BaseModel):
+    title: str
+    type: str  # e.g., "bar", "line", "pie"
+    image_data: str  # Can store base64-encoded image or a file path
+
+class FinalReport(BaseModel):
+    html: str
+    chart_images: List[ChartImage] = []
+
+
+@router.get("/generate-report/{request_id}", response_model=FinalReport)
 async def generate_report_endpoint(
     request_id: str,
     current_user: User = Depends(get_current_user),
@@ -702,17 +739,57 @@ async def generate_report_endpoint(
     if context_data is None:
         raise HTTPException(status_code=404, detail="No context data available for the given request ID.")
 
-    try:        
+    try:
         # Decode and parse JSON directly
-        context_data_dict = json.loads(context_data.decode("utf-8"))  
+        context_data_dict = json.loads(context_data.decode("utf-8"))
 
-        # Pass the dictionary directly
-        report = generate_structured_report(context_data_dict)  
-        return report
-    
+        # Initialize chart_images as empty list
+        chart_images = []
+
+        # Extract raw chart configs (dict or None)
+        raw_chart_configs = context_data_dict.get("current_AI_response", {}).get("chart_configs")
+
+        if raw_chart_configs:
+            try:
+                # Convert dictionary to ChartConfig Pydantic model
+                chart_configs_obj = ChartConfig(**raw_chart_configs)
+            except ValidationError as e:
+                logger.error(f"ChartConfig validation failed: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Invalid chart configuration: {str(e)}")
+
+            # Pass a dictionary representation to generate_charts_images
+            chart_images = generate_charts_images(chart_configs_obj.dict())
+
+            # Extract only required chart details (title, type, mapping)
+            context_data_dict["current_AI_response"]["chart_configs"] = [
+                {
+                    "title": chart.title,
+                    "type": chart.type,
+                    "mapping": {
+                        "label_column": chart.mapping.label_column,
+                        "value_column": chart.mapping.value_column
+                    }
+                }
+                for chart in (chart_configs_obj.primary_charts or []) + (chart_configs_obj.secondary_charts or [])
+            ]
+
+        # Generate structured report
+        report = generate_structured_report(context_data_dict)
+
+        return FinalReport(
+            html=report.html,
+            chart_images=[
+                ChartImage(title=img["title"], type=img["chart_type"], image_data=img["image_base64"])
+                for img in chart_images
+            ]
+        )
+
+    except HTTPException:
+        raise  # Re-raise FastAPI exceptions as they are
     except Exception as e:
         logger.error(f"Report generation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Report generation error: {str(e)}")
+
 
 @router.post("/update_strutured_report", response_model=Report)
 async def update_strutured_report_endpoint(
@@ -834,6 +911,7 @@ async def process_website_endpoint(
         await process_document(list(markdowns), main_identifier, "webpage", current_user.organization_id)
         
         return {
+            "status": "success",
             "message": "Crawling and processing completed",
             "base_url": main_identifier,
             "processed_urls": urls
@@ -845,19 +923,54 @@ async def process_website_endpoint(
             detail=f"Error processing website: {str(e)}"
         )
 
-@router.get("/get-table-access-level")
-async def get_table_access_level_endpoint(
+@router.delete("/delete-processed-document/{doc_id}")
+async def delete_document_endpoint(
+    doc_id: int,
     current_user: User = Depends(get_current_user),
 ):
-    """Update Table Access Level"""
+    """Delete a user from the organization."""
+    try:
+        if current_user.role != "admin":
+            raise HTTPException(403, "Admin privileges required")
+
+        # Call the function to delete the user
+        response = await delete_processed_document(current_user.organization_id, doc_id)
+        
+        if not response:
+            raise HTTPException(status_code=404, detail=f"Doocument {doc_id} not found in organization {current_user.organization_id}")
+
+        return {
+            "status": "success",
+            "message": f"Doocument {doc_id} deleted successfully from organization {current_user.organization_id}",
+        }
+
+    except HTTPException as http_exc:
+        raise http_exc
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@router.get("/get-table-access-level")
+async def get_table_access_level_endpoint(
+    request: GetTableAccessRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Get Table Access Level"""
     try:
 
         if current_user.role != "admin":
             raise HTTPException(403, "Admin privileges required")
 
-        response = await get_control_tables(current_user.organization_id)
+        response = await get_control_tables(current_user.organization_id, request.db_name)
+        
+        if not response:
+            raise HTTPException(status_code=404, detail="Database control tables not found")
 
-        return response
+        return {
+            "status": "success",
+            "message": f"Control tables for {request.db_name} database retrieved successfully",
+            "data": response
+        }
 
     except HTTPException as http_exc:
         raise http_exc
@@ -876,13 +989,15 @@ async def update_table_access_level_endpoint(
         if current_user.role != "admin":
             raise HTTPException(403, "Admin privileges required")
 
-        response = await update_control_table_access(current_user.organization_id, request.table_name, request.access_level)
+        response = await update_control_table_access(current_user.organization_id, request.db_name, request.table_name, request.access_level)
 
-        if response:
-            return {
-                "status": "success",
-                "message": f"Access level updated of table {request.table_name} to {request.access_level} successfully"
-            }
+        if not response:
+            raise HTTPException(status_code=404, detail=f"Could not update access control for table {request.table_name}")
+
+        return {
+            "status": "success",
+            "message": f"Access level for table {request.table_name} updated successfully",
+        }
 
     except HTTPException as http_exc:
         raise http_exc
@@ -891,10 +1006,10 @@ async def update_table_access_level_endpoint(
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @router.get("/get-document-access-level")
-async def get_table_access_level_endpoint(
+async def get_document_access_level_endpoint(
     current_user: User = Depends(get_current_user),
 ):
-    """Update Table Access Level"""
+    """Get Document Access Level"""
     try:
 
         if current_user.role != "admin":
@@ -902,7 +1017,14 @@ async def get_table_access_level_endpoint(
 
         response = await get_control_documents(current_user.organization_id)
 
-        return response
+        if not response:
+            raise HTTPException(status_code=404, detail="Document control tables not found")
+
+        return {
+            "status": "success",
+            "message": "Access Control for documents retrieved successfully",
+            "data": response
+        }
 
     except HTTPException as http_exc:
         raise http_exc
@@ -915,7 +1037,7 @@ async def update_document_access_level_endpoint(
     request: UpdateDocumentAccessRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Update Table Access Level"""
+    """Update Document Access Level"""
     try:
 
         if current_user.role != "admin":
@@ -923,11 +1045,13 @@ async def update_document_access_level_endpoint(
 
         response = await update_document_access(current_user.organization_id, request.doc_id, request.access_level)
 
-        if response:
-            return {
-                "status": "success",
-                "message": f"Access level updated of table {request.doc_id} to {request.access_level} successfully"
-            }
+        if not response:
+            raise HTTPException(status_code=404, detail=f"Could not update access level for document {request.doc_id}")
+
+        return {
+            "status": "success",
+            "message": f"Access level updated of document {request.doc_id} to {request.access_level} successfully",
+        }
 
     except HTTPException as http_exc:
         raise http_exc
@@ -941,13 +1065,49 @@ async def get_users_endpoint(
 ):
     """Update Organization Users"""
     try:
-
         if current_user.role != "admin":
             raise HTTPException(403, "Admin privileges required")
 
         response = await get_created_users(current_user.organization_id)
+        
+        if not response:
+            raise HTTPException(status_code=404, detail=f"No users found for organization {current_user.organization_id}")
 
-        return response
+        return {
+            "status": "success",
+            "message": f"Users for organization {current_user.organization_id} retrieved successfully",
+            "data": response
+        }
+
+    except HTTPException as http_exc:
+        raise http_exc
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@router.delete("/delete-user/{user_id}")
+async def delete_user_endpoint(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a user from the organization."""
+    try:
+        if current_user.role != "admin":
+            raise HTTPException(403, "Admin privileges required")
+        
+        if current_user.id == user_id:
+            raise HTTPException(status_code=400, detail="Cannot delete the current user.")
+
+        # Call the function to delete the user
+        response = await delete_user_from_organization(current_user.organization_id, user_id)
+        
+        if not response:
+            raise HTTPException(status_code=404, detail=f"User {user_id} not found in organization {current_user.organization_id}")
+
+        return {
+            "status": "success",
+            "message": f"User {user_id} deleted successfully from organization {current_user.organization_id}",
+        }
 
     except HTTPException as http_exc:
         raise http_exc

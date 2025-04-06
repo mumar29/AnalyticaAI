@@ -1,5 +1,4 @@
 # graph_main.py
-from fastapi.staticfiles import StaticFiles
 import env_config
 from db_service import DatabaseService
 import asyncio
@@ -115,8 +114,6 @@ app.add_middleware(
     allow_methods=["*"],  # Allowed HTTP methods
     allow_headers=["*"],  # Allowed headers
 )
-
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Security
 api_key_header = APIKeyHeader(name="X-API-Key")

@@ -457,7 +457,7 @@ def generate_structured_report(context_data: Dict[str, Any]) -> Report:
     - The context includes chart_images data with details about charts to be included in the report.
     - For each chart in the chart_images array, create an appropriate image tag at a relevant position in the report.
     - Use the chart's title as the id attribute and alt text for the image tag.
-    - Format each image tag as: <img id="chart-[title]" class="report-chart" alt="[title]" src="placeholder" data-chart-type="[chart_type]" data-x-axis="[label_column]" data-y-axis="[value_column]">
+    - Format each image tag as: <img id="chart-[title]" class="report-chart" alt="[title]" src="[image_url]" data-chart-type="[chart_type]" data-x-axis="[label_column]" data-y-axis="[value_column]">
     - Position each chart in a logical place within the report content, where it best supports the surrounding text.
     - Add a figure caption below each chart using the title.
 

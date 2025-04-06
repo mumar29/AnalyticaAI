@@ -2,9 +2,12 @@ import base64
 import csv
 import io
 import os
+import tempfile
 from urllib.parse import urlparse
 import uuid
+import cloudinary.uploader
 from matplotlib import pyplot as plt
+import pandas as pd
 import psycopg2
 from typing import List, Dict, Optional
 from context_storage import CURRENT_ORG_ID
@@ -13,7 +16,7 @@ from llm_provider import LLMProvider
 from decimal import Decimal
 from datetime import datetime, date, time
 from io import StringIO
-
+import plotly.express as px
 
 def list_dict_to_csv(data: List[Dict]) -> str:
     if not data:
@@ -323,64 +326,70 @@ def execute_sql_file(sql_file_path, db_url):
         return {"status": "error", "message": f"Database setup failed: {str(e)}"}
 
 
+def safe_filename(title: str, max_length: int = 50) -> str:
+    """
+    Generate a safe filename segment from the chart title.
+    Non-alphanumeric characters are replaced with underscores, and the length is capped.
+    """
+    safe_title = "".join(c if c.isalnum() else "_" for c in title)[:max_length]
+    return safe_title
+
 def generate_charts_images(chart_configs: dict) -> list:
-    """
-    Process the ChartConfig to generate chart images.
-    Returns a list of dicts with metadata, e.g.:
-      [{"title": "Sales Over Time", "chart_type": "line", "image_base64": "..."},
-       ...]
-    """
     images = []
-    # Assume chart_configs has a structure that conforms to ChartConfig
     csv_collection = chart_configs.get("csv_collection", {}).get("csvs", [])
-    
-    # Create a mapping of csv_index -> CSV content for quick lookup.
     csv_data = {csv["csv_index"]: csv["content"] for csv in csv_collection}
-    
-    for chart in chart_configs.get("primary_charts", []):
-        # Retrieve CSV content for the chart based on the index
+    primary_charts = chart_configs.get("primary_charts", [])
+    secondary_charts = chart_configs.get("secondary_charts", [])
+    all_charts = primary_charts + secondary_charts
+
+    for chart in all_charts:
         csv_index = chart.get("csv_index")
         csv_content = csv_data.get(csv_index)
-        
         if csv_content:
-            # Parse CSV data as needed; this is an example assuming pandas
-            import pandas as pd
-            from io import StringIO
-
             df = pd.read_csv(StringIO(csv_content))
             mapping = chart.get("mapping", {})
             label_col = mapping.get("label_column")
             value_col = mapping.get("value_column")
-
-            # Plot based on chart type
-            plt.figure(figsize=(6, 4))
             chart_type = chart.get("type")
             title = chart.get("title", "Chart")
-            
-            if chart_type == "bar":
-                plt.bar(df[label_col], df[value_col])
-            elif chart_type == "line":
-                plt.plot(df[label_col], df[value_col])
-            elif chart_type == "pie":
-                plt.pie(df[value_col], labels=df[label_col], autopct="%1.1f%%")
-            # Add other chart types as necessary
+            fig = None
 
-            plt.title(title)
-            plt.tight_layout()
-            
-            # Save image to a bytes buffer
-            buf = io.BytesIO()
-            plt.savefig(buf, format="png")
-            plt.close()
-            buf.seek(0)
-            image_base64 = base64.b64encode(buf.read()).decode("utf-8")
-            
-            images.append({
-                "title": title,
-                "chart_type": chart_type,
-                "image_base64": image_base64,
-                "mapping:": mapping,
-            })
+            if chart_type == "bar":
+                fig = px.bar(df, x=label_col, y=value_col, title=title)
+            elif chart_type == "line":
+                fig = px.line(df, x=label_col, y=value_col, title=title)
+            elif chart_type == "pie":
+                fig = px.pie(df, values=value_col, names=label_col, title=title)
+            else:
+                fig = px.line(df, x=label_col, y=value_col, title=title)
+
+            fig.update_layout(title={'x': 0.5}, xaxis_tickangle=-45)
+
+            # Use your safe filename logic with a unique suffix
+            safe_title = safe_filename(title)
+            unique_suffix = uuid.uuid4().hex[:8]
+            filename = f"{safe_title}_{unique_suffix}.png"
+
+            # Create a temp file in the system temp dir with your filename
+            temp_path = os.path.join(tempfile.gettempdir(), filename)
+
+            try:
+                fig.write_image(temp_path)
+
+                # Upload to image host (e.g., Cloudinary)
+                upload_result = cloudinary.uploader.upload(temp_path, folder="chart_images")
+                image_url = upload_result.get("secure_url")
+
+                images.append({
+                    "title": title,
+                    "chart_type": chart_type,
+                    "image_url": image_url,
+                    "mapping": mapping,
+                })
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+
     return images
 
 # Convenience function for executing queries.

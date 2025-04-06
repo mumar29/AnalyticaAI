@@ -24,5 +24,6 @@ psycopg2
 pyodbc
 pymysql
 pdfkit
+cloudinary
 uvicorn
 gunicorn

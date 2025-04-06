@@ -1,4 +1,5 @@
 # graph_main.py
+from fastapi.staticfiles import StaticFiles
 import env_config
 from db_service import DatabaseService
 import asyncio
@@ -30,6 +31,7 @@ from models import DatabaseConnection
 from database_functions import create_user, delete_processed_document, delete_sql_db_credentials, delete_user_from_organization, fetch_sql_db_credentials, get_control_documents, get_control_tables, get_created_users, get_user, register_organization, set_llm_api_key, fetch_llm_api_key, get_conversation_messages, get_database_schema_for_connection, get_user_conversations, add_sql_db_credentials, update_control_table_access, update_document_access
 from main_supabase_provider import MainSupabaseProvider
 from utils import execute_query, generate_charts_images, get_website_identifier, json_default, list_dict_to_csv, normalize_url, save_credentials_to_env
+import cloudinary_config
 from websocket_manager import manager
 from redis_config import get_redis_client
 
@@ -113,6 +115,8 @@ app.add_middleware(
     allow_methods=["*"],  # Allowed HTTP methods
     allow_headers=["*"],  # Allowed headers
 )
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Security
 api_key_header = APIKeyHeader(name="X-API-Key")
@@ -639,68 +643,85 @@ async def get_company_health_endpoint(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Retrieves the SQL schema using get_database_schema,
-    then generates KPI-related SQL queries from the schema.
-    Executes each query, converts the results to CSV,
-    and uses those CSVs to generate chart configurations.
-    Finally, a performance report is generated with both
+    Retrieves the SQL schema for each active connection for the user's organization.
+    Generates KPI-related SQL queries for each schema, executes the queries with the
+    respective connection IDs, converts the results to CSV, and uses those CSVs to
+    generate chart configurations. Finally, a performance report is generated with both
     text and chart configurations.
     """
     try:
-        # Retrieve the schema from your database
         request_key = f"organization:{current_user.organization_id}:request:health"
         
         # Check if we already have a cached response
         cached_response = redis_client.get(request_key)
         if cached_response:
-            # If a cached response exists, load and return it
             cached_data = json.loads(cached_response)
             return PerformanceReportResponse(**cached_data)
 
-        schema = await get_database_schema_for_connection()
-        tables = schema.get("tables", schema)
-        
-        # Generate KPI SQL queries using the provided schema tables
-        kpi_queries = generate_kpi_sql_queries(tables)
+        # Retrieve all active connections for this organization.
+        connections = DatabaseProvider.get_connections(current_user.organization_id)
+        if not connections:
+            raise HTTPException(status_code=500, detail="No active database connections found for the organization.")
 
-        results = []
-        csv_list = []
-        for query in kpi_queries.sql_queries:
-            try:
-                logger.debug("Executing SQL query: %s", query)
-                query_result = execute_query(query)
-                csv_result = list_dict_to_csv(query_result)
-                logger.debug("SQL query result (CSV): %s", csv_result)
-                results.append({
-                    "tables_involved": kpi_queries.tables_involved,  # include table names here
-                    "data": csv_result
-                })
-                if csv_result:
-                    csv_list.append(csv_result)
-            except Exception as e:
-                logger.exception("Error executing SQL query: %s", query)
-                results.append({
-                    "tables_involved": kpi_queries.tables_involved,  # include table names here
-                    "error": str(e)
-                })
+        all_results = []
+        overall_csv_list = []
 
-        # Prepare context with SQL results for generating the report
-        context = "SQL Results:\n" + json.dumps(results, default=json_default, indent=2)
+        # Process each connection separately.
+        for connection_id in connections.keys():
+            logger.debug("Processing connection: %s", connection_id)
+            
+            # Retrieve the schema for the current connection.
+            schema = await get_database_schema_for_connection(connection_id)
+            tables = schema.get("tables", schema)
+            
+            # Generate KPI SQL queries using the schema tables.
+            kpi_queries = generate_kpi_sql_queries(tables)
+            connection_results = []
+            csv_list = []
+
+            # Execute each generated query with the connection ID.
+            for query in kpi_queries.sql_queries:
+                try:
+                    logger.debug("Executing SQL query on connection %s: %s", connection_id, query)
+                    query_result = execute_query(query, connection_id)
+                    csv_result = list_dict_to_csv(query_result)
+                    logger.debug("SQL query result (CSV) on connection %s: %s", connection_id, csv_result)
+                    connection_results.append({
+                        "tables_involved": kpi_queries.tables_involved,
+                        "data": csv_result
+                    })
+                    if csv_result:
+                        csv_list.append(csv_result)
+                    # Optional: if you want to include query errors per connection, you can capture them similarly.
+                except Exception as e:
+                    logger.exception("Error executing SQL query on connection %s: %s", connection_id, query)
+                    connection_results.append({
+                        "tables_involved": kpi_queries.tables_involved,
+                        "error": str(e)
+                    })
+
+            overall_csv_list.extend(csv_list)
+            all_results.append({
+                "database": connection_id,
+                "query_results": connection_results
+            })
+
+        # Prepare context with SQL results for generating the report.
+        context = "SQL Results:\n" + json.dumps(all_results, default=json_default, indent=2)
         
-        # Generate chart configurations using the collected CSV results
+        # Generate chart configurations if there are CSV results.
         chart_configs = None
-        if csv_list:
-            # Create a minimal context similar to previous implementation
+        if overall_csv_list:
             context_data = {
                 "current_user_query": "Get Important company health metrics and performance data",
                 "context": {
-                    "sql_results": results
+                    "sql_results": all_results
                 }
             }
-            chart_configs = get_chart_configs(csv_list, context_data)
+            chart_configs = get_chart_configs(overall_csv_list, context_data)
             logger.debug("Chart configurations generated: %s", chart_configs)
 
-        # Generate the performance report, including chart configurations if available.
+        # Generate the performance report.
         text_report = generate_performance_report(context)
 
         response = PerformanceReportResponse(
@@ -709,9 +730,8 @@ async def get_company_health_endpoint(
         )
 
         redis_client.set(request_key, json.dumps(response.dict()), ex=86400)
-        
         return response
-    
+
     except Exception as e:
         logger.error(f"Health Retrieval failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -726,7 +746,7 @@ class FinalReport(BaseModel):
     chart_images: List[ChartImage] = []
 
 
-@router.get("/generate-report/{request_id}", response_model=FinalReport)
+@router.get("/generate-report/{request_id}", response_model=Report)
 async def generate_report_endpoint(
     request_id: str,
     current_user: User = Depends(get_current_user),
@@ -749,40 +769,24 @@ async def generate_report_endpoint(
         # Extract raw chart configs (dict or None)
         raw_chart_configs = context_data_dict.get("current_AI_response", {}).get("chart_configs")
 
-        if raw_chart_configs:
-            try:
-                # Convert dictionary to ChartConfig Pydantic model
-                chart_configs_obj = ChartConfig(**raw_chart_configs)
-            except ValidationError as e:
-                logger.error(f"ChartConfig validation failed: {str(e)}")
-                raise HTTPException(status_code=400, detail=f"Invalid chart configuration: {str(e)}")
+        # Pass a dictionary representation to generate_charts_images
+        chart_images = generate_charts_images(raw_chart_configs)
 
-            # Pass a dictionary representation to generate_charts_images
-            chart_images = generate_charts_images(chart_configs_obj.dict())
-
-            # Extract only required chart details (title, type, mapping)
-            context_data_dict["current_AI_response"]["chart_configs"] = [
-                {
-                    "title": chart.title,
-                    "type": chart.type,
-                    "mapping": {
-                        "label_column": chart.mapping.label_column,
-                        "value_column": chart.mapping.value_column
-                    }
-                }
-                for chart in (chart_configs_obj.primary_charts or []) + (chart_configs_obj.secondary_charts or [])
-            ]
+        # Extract only required chart details (title, type, mapping)
+        context_data_dict["current_AI_response"]["chart_configs"] = [
+            {
+                "title": chart["title"],
+                "type": chart["chart_type"],
+                "image_url": chart["image_url"],
+                "mapping": chart["mapping"]
+            }
+            for chart in chart_images
+        ]
 
         # Generate structured report
         report = generate_structured_report(context_data_dict)
 
-        return FinalReport(
-            html=report.html,
-            chart_images=[
-                ChartImage(title=img["title"], type=img["chart_type"], image_data=img["image_base64"])
-                for img in chart_images
-            ]
-        )
+        return report
 
     except HTTPException:
         raise  # Re-raise FastAPI exceptions as they are

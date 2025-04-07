@@ -334,6 +334,92 @@ def safe_filename(title: str, max_length: int = 50) -> str:
     safe_title = "".join(c if c.isalnum() else "_" for c in title)[:max_length]
     return safe_title
 
+# def generate_charts_images(chart_configs: dict) -> list:
+#     images = []
+#     csv_collection = chart_configs.get("csv_collection", {}).get("csvs", [])
+#     csv_data = {csv["csv_index"]: csv["content"] for csv in csv_collection}
+#     primary_charts = chart_configs.get("primary_charts", [])
+#     secondary_charts = chart_configs.get("secondary_charts", [])
+#     all_charts = primary_charts + secondary_charts
+
+#     def process_column(df: pd.DataFrame, col: str, col_type: str) -> pd.DataFrame:
+#         if col_type == "datetime":
+#             df[col] = pd.to_datetime(df[col], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+#         elif col_type == "date":
+#             df[col] = pd.to_datetime(df[col]).dt.date
+#         elif col_type == "numeric":
+#             df[col] = pd.to_numeric(df[col], errors='coerce')
+#         elif col_type == "boolean":
+#             df[col] = df[col].astype(bool)
+#         elif col_type == "category":
+#             df[col] = df[col].astype('category')
+#         # text columns remain as strings
+#         return df
+
+#     for chart in all_charts:
+#         csv_index = chart.get("csv_index")
+#         csv_content = csv_data.get(csv_index)
+#         if csv_content:
+#             df = pd.read_csv(StringIO(csv_content))
+#             mapping = chart.get("mapping", {})
+            
+#             # Process axis configurations
+#             label_config = mapping.get("label", {})
+#             value_config = mapping.get("value", {})
+
+#             # Get column names and types
+#             label_col = label_config.get("source_column")
+#             label_col_display = label_config.get("display_name")
+#             label_type = label_config.get("column_type", "category")
+            
+#             value_col = value_config.get("source_column")
+#             value_col_display = value_config.get("display_name")
+#             value_type = value_config.get("column_type", "numeric")
+
+#             # Process columns
+#             if label_col and label_col in df.columns:
+#                 df = process_column(df, label_col, label_type)
+#             if value_col and value_col in df.columns:
+#                 df = process_column(df, value_col, value_type)
+
+#             chart_type = chart.get("type")
+#             title = chart.get("title", "Chart")
+#             fig = None
+
+#             # Generate plot with processed data
+#             if chart_type == "bar":
+#                 fig = px.bar(df, x=label_col, y=value_col, title=title, labels={label_col: label_col_display, value_col: value_col_display})
+#             elif chart_type == "line":
+#                 fig = px.line(df, x=label_col, y=value_col, title=title, labels={label_col: label_col_display, value_col: value_col_display})
+#             elif chart_type == "pie":
+#                 fig = px.pie(df, values=value_col, names=label_col, title=title, labels={label_col: label_col_display, value_col: value_col_display})
+#             else:
+#                 fig = px.line(df, x=label_col, y=value_col, title=title, labels={label_col: label_col_display, value_col: value_col_display})
+
+#             fig.update_layout(title={'x': 0.5}, xaxis_tickangle=-45)
+
+#             # Image handling
+#             safe_title = safe_filename(title)
+#             unique_suffix = uuid.uuid4().hex[:8]
+#             filename = f"{safe_title}_{unique_suffix}.png"
+#             temp_path = os.path.join(tempfile.gettempdir(), filename)
+
+#             try:
+#                 fig.write_image(temp_path)
+#                 upload_result = cloudinary.uploader.upload(temp_path, folder="chart_images")
+#                 images.append({
+#                     "title": title,
+#                     "chart_type": chart_type,
+#                     "image_url": upload_result.get("secure_url"),
+#                     "mapping": mapping,
+#                 })
+#             finally:
+#                 if os.path.exists(temp_path):
+#                     os.remove(temp_path)
+
+#     return images
+
+
 def generate_charts_images(chart_configs: dict) -> list:
     images = []
     csv_collection = chart_configs.get("csv_collection", {}).get("csvs", [])
@@ -347,9 +433,11 @@ def generate_charts_images(chart_configs: dict) -> list:
         csv_content = csv_data.get(csv_index)
         if csv_content:
             df = pd.read_csv(StringIO(csv_content))
+            
             mapping = chart.get("mapping", {})
             label_col = mapping.get("label_column")
             value_col = mapping.get("value_column")
+
             chart_type = chart.get("type")
             title = chart.get("title", "Chart")
             fig = None

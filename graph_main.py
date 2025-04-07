@@ -408,6 +408,8 @@ async def remove_sql_database_endpoint(
         if not response.get("success"):
             raise HTTPException(status_code=500, detail="Failed to remove database config")
         
+        DatabaseProvider.close_connection(current_user.organization_id, dbname)
+        
         return {
             "status": "success",
             "message": f"Removed SQL database credentials for '{dbname}'.",

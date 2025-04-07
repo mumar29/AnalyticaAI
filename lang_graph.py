@@ -80,7 +80,11 @@ async def process_sql(state: AgentState):
         schemas = {}
         for connection_id in connections.keys():
             schema = await get_filtered_schema_for_connection(state["org_id"], connection_id, state["user_role"])
+            schema["database_name"] = connection_id
+            
             schemas[connection_id] = schema
+
+        multi_database = len(schemas) > 1
 
         # Broadcast progress (optional).
         await manager.broadcast("Identifying relevant SQL tables and generating SQL queries") 
@@ -100,12 +104,12 @@ async def process_sql(state: AgentState):
 
         # Initialize a list to store results.
         results_list = []
-
+        
         # For each connection, generate and execute queries.
         for connection_id, schema in schemas.items():
-            logger.debug("Generating SQL queries for connection %s", connection_id)
+            logger.debug("Generating SQL queries for connection: %s", connection_id)
             
-            tables = select_relevant_sql_tables(schema, context)
+            tables = select_relevant_sql_tables(schema, context, multi_database)
             connection_results = []
             for table in tables.tables:
                 table_result = {

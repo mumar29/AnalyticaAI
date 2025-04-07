@@ -116,7 +116,8 @@ class LLMProvider:
         
         try:
             if config.provider == "GROQ":
-                system_prompt_with_schema = f"""{system_prompt}\nReturn your answer as a JSON object following this schema:\n{json.dumps(response_schema, indent=2)}"""
+                system_prompt_with_schema = f"""{system_prompt}\nReturn your answer as a JSON object strictly following this schema:\n{json.dumps(response_schema, indent=2)}"""
+                
                 chat_completion = client.chat.completions.create(
                     model=config.model,
                     messages=[

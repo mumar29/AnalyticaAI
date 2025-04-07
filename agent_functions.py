@@ -1,7 +1,7 @@
 import json
 from typing import Any, Dict, List, Literal, Optional, Set
 from fastapi import HTTPException
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from utils import generate_completion, is_valid_csv
 
 class IndexedCSV(BaseModel):
@@ -15,6 +15,15 @@ class Mapping(BaseModel):
     label_column: str
     value_column: str
 
+# class AxisConfig(BaseModel):
+#     source_column: str
+#     display_name: str
+#     column_type: Literal["datetime", "date", "numeric", "category", "text", "boolean"]
+    
+# class Mapping(BaseModel):
+#     label: AxisConfig
+#     value: AxisConfig
+
 class Chart(BaseModel):
     csv_index: int
     title: str
@@ -23,7 +32,7 @@ class Chart(BaseModel):
 
 class ChartConfig(BaseModel):
     primary_charts: List[Chart]
-    secondary_charts: Optional[List[Chart]] = []
+    secondary_charts: Optional[List[Chart]]
     csv_collection: CSVCollection
 
 class ProcessConv(BaseModel):
@@ -51,7 +60,7 @@ class Doc_Ids(BaseModel):
 class TableQuery(BaseModel):
     tables_involved: List[str]  # List of all tables used in the query.
     direct_queries: List[str]
-    supplementary_queries: Optional[List[str]] = []  # Optional, defaulting to an empty list
+    supplementary_queries: Optional[List[str]]  # Optional, defaulting to an empty list
 
 class TablesRetrieved(BaseModel):
     tables: List[TableQuery]
@@ -112,7 +121,7 @@ class UpdateReportRequest(BaseModel):
         return self
 
 def generate_final_response(user_content: str, needs_rag: bool, is_admin: bool) -> LLMResponse:
-    chart_instruction = ' Additionally, if the user requests a chart or graph, ignore the request and say "Is there anything else I can help with?"'
+    chart_instruction = ' Additionally, if the user requests a chart or graph, no need to address it in your response. Chart generation is handled separately by another module in the pipeline.'
 
     if needs_rag:
         base_prompt = (
@@ -312,7 +321,7 @@ def select_relevant_documents(documents: List[Document], context: dict) -> Doc_I
         print(f"Error selecting relevant documents: {e}")
         raise e
 
-def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> TablesRetrieved:
+def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict, multi_database: bool = False) -> TablesRetrieved:
     
     # system_prompt = f"""
     #     You are an advanced SQL query optimization assistant with enhanced contextual understanding.
@@ -349,25 +358,75 @@ def select_relevant_sql_tables(sql_schema: Dict[str, Any], context: dict) -> Tab
     #     Ensure that your output is valid JSON according to the provided schema.
     # """
 
-    system_prompt = f"""
-        You are a SQL query generation assistant. Select relevant tables from schema based on:
+    # base_prompt = """
+    #     SELECTION CRITERIA: 
+    #     • Analyze conversation context thoroughly for both explicit AND IMPLICIT information needs 
+    #     • Choose tables containing columns that provide all the necessary context even if not directly requested 
+    #     • Prioritize complete, informative results with depth over minimal query requirements 
+ 
+    #     QUERY STRATEGY: 
+    #     • Include all implicitly relevant columns that add context or answer potential follow-ups 
+    #     • Prefer single optimized queries with joins over multiple separate queries 
+    #     • Create separate queries only when information cannot be logically joined 
+ 
+    #     OUTPUT: 
+    #     • For each query, list all selected table names 
+    #     • Structure: Direct queries (main answer) + Supplementary queries (additional insights) 
+ 
+    #     NOTE: Schema format shows tables with columns (name->type) and view_access. Ignore exclamation marks (!) in column types.
+    # """
+    
+    base_prompt = """
+        BUSINESS ANALYTICAL FOCUS:
+        • Generate queries that reveal trends, performance metrics, and actionable business insights
+        • Include supporting dimensions for every metric (who, what, when, where, how)
+        • Incorporate temporal analysis, segmentation, and comparative metrics
+    
+        SELECTION CRITERIA: 
+        • Analyze conversation context thoroughly for both explicit AND IMPLICIT information needs 
+        • Include all contextually relevant tables and columns even if not directly requested
+        • Prioritize analytical depth over minimal requirements
+    
+        QUERY STRATEGY: 
+        • Apply appropriate aggregations with meaningful groupings
+        • Include period-over-period comparisons and trend calculations
+        • Segment results by relevant business dimensions (region, product, customer type)
+        • Create derived metrics and KPIs that provide business value
+        • Optimize with joins rather than separate queries when possible
 
-        SELECTION CRITERIA:
-        • Analyze conversation context thoroughly for both explicit AND IMPLICIT information needs
-        • Choose tables containing columns that provide all the necessary context even if not directly requested
-        • Prioritize complete, informative results with depth over minimal query requirements
-
-        QUERY STRATEGY:
-        • Include all implicitly relevant columns that add context or answer potential follow-ups
-        • Prefer single optimized queries with joins over multiple separate queries
-        • Create separate queries only when information cannot be logically joined
-
-        OUTPUT:
-        • For each query, list all selected table names
-        • Structure: Direct queries (main answer) + Supplementary queries (additional insights)
-
+        OUTPUT: 
+        • List tables used and business purpose of each query
+        • Include main queries + supplementary insights queries
+    
         NOTE: Schema format shows tables with columns (name->type) and view_access. Ignore exclamation marks (!) in column types.
     """
+    
+    # Multi-database specific introduction
+    # if multi_database:  
+    #     intro = """
+    #         You are a SQL query generation assistant. This query generation task is part of a multi-database process where the user's overall query will be addressed by running similar tasks across several databases.  
+    #         Your goal is to generate SQL queries that extract as much relevant information from the current database's schema that will aid in answering the user's overall query after aggregating the data across all databases. If the schema does not contain data relevant to a portion of the user's overall query, generate minimal or no queries.
+    #     """
+    # else:       
+    #     intro = """
+    #         You are a SQL query generation assistant. Select relevant tables from schema based on:
+    #     """
+    
+    if multi_database:  
+        intro = """
+            You are a SQL query generation assistant for business analytics. This is part of a multi-database process.
+            
+            Generate comprehensive SQL queries extracting all business-relevant metrics, dimensions, and relationships from this database's schema to support cross-database analytical insights.
+            
+            If the schema lacks relevant data for portions of the user's query, generate minimal or no queries for those portions.
+        """
+    else:       
+        intro = """
+            You are a SQL query generation assistant for business analytics. Select relevant tables from schema based on:
+        """
+    
+    # Combine the intro and base prompt
+    system_prompt = f"{intro}\n{base_prompt}"
 
     try:
         context_json = json.dumps(context, indent=2)
@@ -440,37 +499,130 @@ def generate_performance_report(sql_results: List[Dict[str, Any]]) -> Performanc
     
 def generate_structured_report(context_data: Dict[str, Any]) -> Report:
     system_prompt = f"""
-    You are an HTML Report Generator that produces complete, professional business reports in HTML format.
+    You are a Expert Data Analyst that produces detailed, professional business reports in HTML5 format.
 
     Your task is to generate a professional report based on the provided context, the user's current query, and any relevant past conversation messages. The report should be centered on the user's latest query, but if previous conversation messages (including both user queries and AI responses) contain additional details or data that relate to this topic, you must integrate that information to create a richer, more comprehensive report.
 
     Guidelines:
-    1. **Relevance Check:** Review the entire conversation history. Use the past conversation data only if it is directly related to the current query. If there are multiple queries on similar topics, combine them to provide a complete view.
-    2. **Introduction:** Start by introducing the topic in your own words if it’s not already fully covered in the provided context.
-    3. **Detailed Analysis:** Include any additional insights, future predictions, or suggestions that enhance the report. Organize the information into sections using appropriate headings.
+    1. **Relevance Check:** Review the entire conversation history if present. Use the past conversation data only if it is directly related to the current query. If there are multiple queries on similar topics, combine them to provide a complete view.
+    2. **Data Sources:** Never mention the data sources from which the report was compiled.
+    3. **Data Analysis & Insights:**
+    - Uncover trends, outliers, and patterns.
+    - Use diagnostic, comparative, or predictive analysis to reveal growth trends, market shifts, and performance anomalies.
+    - Must Provide actionable recommendations for business improvements.
     4. **Formatting:** 
-    - Output a complete, valid HTML document including `<html>`, `<head>`, and `<body>` tags.
+    - Output a complete, valid HTML5 document including `<html>`, `<head>`, and `<body>` tags.
     - Use inline CSS or internal `<style>` tags for professional styling.
-    - Use bullet points or numbered lists where applicable.
+    - Use bullet points, numbered lists or tables where applicable.
 
     5. **Chart Images:**
-    - The context includes chart_images data with details about charts to be included in the report.
-    - For each chart in the chart_images array, create an appropriate image tag at a relevant position in the report.
-    - Use the chart's title as the id attribute and alt text for the image tag.
-    - Format each image tag as: <img id="chart-[title]" class="report-chart" alt="[title]" src="[image_url]" data-chart-type="[chart_type]" data-x-axis="[label_column]" data-y-axis="[value_column]">
-    - Position each chart in a logical place within the report content, where it best supports the surrounding text.
-    - Add a figure caption below each chart using the title.
-
-    Return the full working HTML document in the output.
+    - For each chart in the `chart_images` array, include:
+        ```html
+        <figure class="chart-container">
+            <img id="chart-[title]" class="report-chart" alt="[title]" src="[image_url]" data-chart-type="[chart_type]">
+            <figcaption class="chart-caption">[Descriptive caption here]</figcaption>
+        </figure>
+        ```
+    - Position each chart logically within the report content and centralize it using inline CSS.
     """
+
+    # system_prompt = f"""
+    # You are a Data Analytics Report Generator that creates professional business reports in complete HTML5 format. Using the provided raw business data (e.g., product performance, customer behavior, sales data), you will generate a detailed, data-driven report with actionable insights.
+
+    # Key requirements:
+    # 1. **Data Analysis & Insights:**
+    # - Uncover trends, outliers, and patterns.
+    # - Use diagnostic, comparative, or predictive analysis to reveal growth trends, market shifts, and performance anomalies.
+    # - Provide actionable recommendations for business improvements.
+
+    # 2. **Report Structure:**
+    # - **Introduction:** Clearly introduce the report with a data-driven context.
+    # - **Analysis Sections:** 
+    #     - *Overall Performance:* Summarize key metrics and trends.
+    #     - *Trend Analysis:* Highlight seasonal patterns and performance changes.
+    # - **Conclusions & Recommendations:** Summarize findings and suggest strategic actions.
+
+    # 3. **Visuals:**
+    # - For each chart in the `chart_images` array, include:
+    #     ```html
+    #     <figure class="chart-container">
+    #         <img id="chart-[title]" class="report-chart" alt="[title]" src="[image_url]" data-chart-type="[chart_type]" data-x-axis="[label_column]" data-y-axis="[value_column]">
+    #         <figcaption class="chart-caption">[Descriptive caption here]</figcaption>
+    #     </figure>
+    #     ```
+    # - Position and caption charts centrally using inline CSS or internal `<style>` tags.
+    # - Include tables and graphs as needed.
+
+    # 4. **Tone & Format:**
+    # - Maintain a professional, clear, and business-friendly tone.
+    # - Avoid technical jargon (e.g., do not mention data sources like SQL/PDFs or database names; use business terms like "Chicago store" or "quarterly performance data").
+    # - Generate a complete HTML5 document with `<html>`, `<head>`, and `<body>` tags.
+
+    # Generate the report accordingly.
+    # """
+
+
+    # system_prompt = f"""
+    # You are a Data Analytics Report Generator that creates professional HTML business reports from raw data.
+
+    # Your task is to analyze the provided data based on the user's query and generate an insightful HTML report that:
+
+    # 1. *Analyzes the Data:* Identify key trends, patterns, outliers, and correlations in the dataset.
+
+    # 2. *Extracts Actionable Insights:* Highlight growth trends, performance issues, hidden correlations, and customer behavior patterns.
+
+    # 3. *Structures the Report:*
+    # - Professional introduction explaining the analysis context
+    # - Overall performance summary with key metrics
+    # - Detailed analysis of specific data points with recommendations
+    # - Clear conclusions and strategic recommendations
+
+    # 4. *Formats Professionally:*
+    # - Generate a complete, valid HTML5 document with proper styling
+    # - Use internal <style> tags or inline CSS for professional appearance
+    # - Ensure readability with appropriate headings, lists, and text formatting
+
+    # 5. *Chart Images:*
+    # - For each chart in the chart_images array, create an image tag as:
+    #     <img id="chart-[title]" class="report-chart" alt="[title]" src="[image_url]" 
+    #     data-chart-type="[chart_type]" data-x-axis="[label_column]" data-y-axis="[value_column]">
+    # - Position charts logically within related content
+    # - Add a caption below each chart
+
+    # Return the complete HTML document with professional, actionable analysis in a business-appropriate tone.
+    # """
 
     try:
 
         schema_json = json.dumps(context_data, indent=2)
 
         response_content = generate_completion(system_prompt, schema_json, Report.model_json_schema())
+        print("=====================")
+        print(f"HTML response content: {response_content}")
+        print("=====================")
         
         return Report.model_validate_json(response_content)
+
+    except ValidationError as e:
+        # Try to extract the html_content field manually
+        try:
+            parsed_response = json.loads(response_content)
+            # If the response is in JSON Schema format, it will have a 'properties' field.
+            if "properties" in parsed_response and "html_content" in parsed_response["properties"]:
+                html_field = parsed_response["properties"]["html_content"]
+                # In our schema, the actual HTML content is stored under the 'value' key.
+                html_content = html_field.get("value", None)
+                if html_content is None:
+                    raise ValueError("The 'value' key for html_content was not found.")
+                return Report(html_content=html_content)
+            # Otherwise, try the top-level extraction.
+            elif "html_content" in parsed_response:
+                html_content = parsed_response["html_content"]
+                return Report(html_content=html_content)
+            else:
+                raise ValueError("html_content field not found in the response.")
+        except json.JSONDecodeError as json_err:
+            raise ValueError("Response is not valid JSON.") from json_err
         
     except Exception as e:
         print(f"Error generating report: {e}")
@@ -523,6 +675,113 @@ def infer_missing_headers(csv: str, max_columns: int) -> CSVHeaderCorrection:
         raise e
 
 
+# def get_chart_configs(csv_list: List[str], context: dict) -> Optional[ChartConfig]:
+
+#     system_prompt = f"""
+#         You are a data visualization expert. Generate VALID chart configurations from CSV samples (with indices) according to these PRIORITY RULES:
+
+#         1. USER PREFERENCES (HIGHEST PRIORITY):
+#             • Honor explicit user requirements when present (chart type, number of charts, columns, comparisons)
+#             • If user requests are infeasible, choose closest practical alternative
+
+#         2. AUTO CHART SELECTION (WHEN NO USER SPECIFICATIONS):
+#             • Primary charts (1-2 max): Directly answer user query
+#             • Secondary charts (optional): Only if adding significant value
+#             • Data-appropriate chart type: trends→line/bar, comparisons→bar/pie, distributions→bar, frequencies→pie/doughnut
+#             • Maximum 3 charts total across primary and secondary
+
+#         3. MANDATORY COLUMN RULES:
+#             • Label column: Time series data (datetime/date) OR categorical/text data with unique values
+#             • Value column: Numerical data OR categorical for counts/frequencies
+#             • MUST be different columns for label and value
+
+#         4. PROHIBITIONS:
+#             • No duplicate column usage for label/value
+#             • No reusing same label/value pairs across charts
+#             • No imaginary columns - use only what exists.
+
+#         5. TOPIC RELEVANCE:
+#             • Ensure that the generated chart configurations are aligned with the overall topic and content of the final textual response.
+#             • Charts that are thematically related and add visual support to the discussion are acceptable.       
+            
+#         Skip irrelevant CSVs (CSVs that don't match user request context) and provide concise chart titles.
+#     """
+
+#     try:
+#         # Preprocess CSVs: filter out invalid CSVs
+#         valid_csv_entries = [(i, csv) for i, csv in enumerate(csv_list) if is_valid_csv(csv)]
+#         if not valid_csv_entries:
+#             return None
+
+#         # Create a mapping of original index to CSV content for valid CSVs
+#         valid_indices = {i for i, _ in valid_csv_entries}
+#         csv_list_filtered = {i: csv for i, csv in valid_csv_entries}
+
+#         # Build the CSVCollection using only valid CSVs
+#         csv_collection = CSVCollection(
+#             csvs=[IndexedCSV(csv_index=i, content=csv) for i, csv in csv_list_filtered.items()]
+#         )
+#         csv_json = csv_collection.model_dump_json(indent=2)
+#         context_json = json.dumps(context, indent=2)
+#         user_content = f"Context: {context_json}\n\nCSV Samples:\n{csv_json}"
+
+#         # Generate completion based on the updated system prompt and expected JSON schema
+#         response_content = generate_completion(system_prompt, user_content, ChartConfig.model_json_schema())
+
+#         # Validate response against the model
+#         raw_config = ChartConfig.model_validate_json(response_content)
+
+#         # Second pass: Validate and collect used indices for CSVs from both primary and secondary charts
+#         used_indices: Set[int] = set()
+#         valid_primary_charts = []
+#         valid_secondary_charts = []
+
+#         # Process primary charts
+#         for chart in raw_config.primary_charts:
+#             if chart.csv_index not in valid_indices:
+#                 print(f"Skipping primary chart with invalid csv_index {chart.csv_index}")
+#                 continue
+#             if chart.mapping.label.source_column == chart.mapping.value.source_column:
+#                 print(f"Skipping primary chart with identical label and value columns: {chart.mapping.label.source_column}")
+#                 continue
+#             used_indices.add(chart.csv_index)
+#             valid_primary_charts.append(chart)
+
+#         # Process secondary charts
+#         if raw_config.secondary_charts:
+#             for chart in raw_config.secondary_charts:
+#                 if chart.csv_index not in valid_indices:
+#                     print(f"Skipping secondary chart with invalid csv_index {chart.csv_index}")
+#                     continue
+#                 if chart.mapping.label.source_column == chart.mapping.value.source_column:
+#                     print(f"Skipping secondary chart with identical label and value columns: {chart.mapping.label.source_column}")
+#                     continue
+#                 used_indices.add(chart.csv_index)
+#                 valid_secondary_charts.append(chart)
+
+#         # Ensure there is at least one valid primary chart
+#         if not valid_primary_charts:
+#             return None
+
+#         # Limit primary charts to 2 at maximum
+#         valid_primary_charts = valid_primary_charts[:2]
+
+#         # Build minimal CSV collection using only the CSV indices that were used
+#         minimal_csvs = [
+#             IndexedCSV(csv_index=i, content=csv_list[i])
+#             for i in sorted(used_indices)
+#         ]
+
+#         return ChartConfig(
+#             primary_charts=valid_primary_charts,
+#             secondary_charts=valid_secondary_charts,
+#             csv_collection=CSVCollection(csvs=minimal_csvs)
+#         )
+
+#     except Exception as e:
+#         print(f"Error getting chart config: {e}")
+#         raise e
+
 def get_chart_configs(csv_list: List[str], context: dict) -> Optional[ChartConfig]:
 
     system_prompt = f"""
@@ -539,8 +798,8 @@ def get_chart_configs(csv_list: List[str], context: dict) -> Optional[ChartConfi
             • Maximum 3 charts total across primary and secondary
 
         3. MANDATORY COLUMN RULES:
-            • Label column: Categorical/text data with unique values
-            • Value column: Numerical data OR categorical for counts
+            • Label column: Time series data (datetime/date) OR categorical/text data with unique values
+            • Value column: Numerical data OR categorical for counts/frequencies
             • MUST be different columns for label and value
 
         4. PROHIBITIONS:

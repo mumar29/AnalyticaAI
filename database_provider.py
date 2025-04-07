@@ -128,17 +128,37 @@ class DatabaseProvider:
                 cursor.close()
 
     @classmethod
-    def close(cls, org_id: int):
-        """Close the connection for a specific organization."""
-        if org_id in cls._connections:
-            _, connection, _ = cls._connections[org_id]
+    def close_connection(cls, org_id: int, connection_id: str):
+        """Close a single connection for a given organization."""
+        if org_id in cls._connections and connection_id in cls._connections[org_id]:
+            config, connection, _ = cls._connections[org_id][connection_id]
             try:
                 if isinstance(connection, Client):
                     connection.postgrest.close()
-                else:
+                elif hasattr(connection, "close"):
                     connection.close()
             except Exception as e:
-                print(f"Error closing connection for org {org_id}: {e}")
+                print(f"Error closing connection for org {org_id}, connection {connection_id}: {e}")
+            finally:
+                # Remove this specific connection from the mapping
+                del cls._connections[org_id][connection_id]
+                # Clean up the organization mapping if no connections remain.
+                if not cls._connections[org_id]:
+                    del cls._connections[org_id]
+
+    @classmethod
+    def close_all_connections(cls, org_id: int):
+        """Close all connections for a specific organization."""
+        if org_id in cls._connections:
+            for connection_id, (_, connection, _) in list(cls._connections[org_id].items()):
+                try:
+                    if isinstance(connection, Client):
+                        connection.postgrest.close()
+                    elif hasattr(connection, "close"):
+                        connection.close()
+                except Exception as e:
+                    print(f"Error closing connection for org {org_id}, connection {connection_id}: {e}")
+            # Remove the entire organization mapping
             del cls._connections[org_id]
 
     @staticmethod

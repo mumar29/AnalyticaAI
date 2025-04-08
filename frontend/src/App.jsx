@@ -22,6 +22,7 @@ function App() {
         {/* Protected routes */}
           <Route element={<ProtectedRoute/>}>
             <Route path='/userDashboard' element={<Layout/>}/>
+            {/* <Route path="/chat" element={<ChatInterface />} /> */}
           </Route>
         </Routes>
       </BrowserRouter>

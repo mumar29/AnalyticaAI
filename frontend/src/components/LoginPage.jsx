@@ -272,19 +272,19 @@ export default function LoginRegisterPage() {
       <div className="relative z-10">
         {/* Header */}
         <header className="mx-auto flex max-w-7xl items-center justify-between px-6 py-6">
-          <h1 className="text-2xl font-bold tracking-wider text-purple-400">EVOLVION</h1>
-          <nav className="hidden space-x-10 md:flex">
+          <h1 className="text-2xl font-bold tracking-wider text-purple-400">Analytica AI</h1>
+          <nav className=" space-x-10 md:flex">
             <a href="#" className="border-b-2 border-white pb-1 text-white">Home</a>
             <a href="#" className="border-b-2 border-transparent pb-1 text-gray-300 hover:text-white">Portfolio</a>
             <a href="#" className="border-b-2 border-transparent pb-1 text-gray-300 hover:text-white">Contact</a>
           </nav>
-          <Button className="hidden rounded-full bg-[#0ffff1] px-6 py-2 text-[#0a0a18] hover:bg-[#0ee6d9] md:block">
+          <Button className=" rounded-full bg-[#0ffff1] px-6 py-2 text-[#0a0a18] hover:bg-[#0ee6d9] md:block">
             {isLogin ? "Login" : "Sign Up"}
           </Button>
         </header>
 
         {/* Form Section */}
-        <main className="mx-auto mt-20 max-w-md px-6">
+        <main className="mx-auto mt-5 max-w-md px-6">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}

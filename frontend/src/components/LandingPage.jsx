@@ -165,7 +165,7 @@ export default function LandingPage() {
               animate="visible"
               className="text-xl font-bold leading-tight tracking-tight md:text-7xl"
             >
-              LLM Powered Data Analytics Solution
+              LLM Powered Data Analytics
             </motion.h5>
           </motion.div>
 

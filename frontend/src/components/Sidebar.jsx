@@ -21,7 +21,7 @@ function Sidebar({ setCurrentView }) {
     // {/* Sidebar */}
     <aside className="fixed left-0 top-0 z-20 flex h-full w-64 flex-col bg-[#131323] shadow-lg">
       <div className="p-6">
-        <h1 className="text-2xl font-bold tracking-wider text-[#0ffff1]">
+        <h1 className="text-2xl font-bold tracking-wider text-[#8A2BE2]">
           Analytica AI
         </h1>
       </div>
@@ -51,7 +51,7 @@ function Sidebar({ setCurrentView }) {
       <div className="mt-auto p-4">
         <Button
           onClick={handleLogout}
-          className="w-full bg-red-600 hover:bg-red-700"
+          className="w-full bg-red-400 hover:bg-red-700"
         >
           <FiLogOut className="mr-2" /> Logout
         </Button>
@@ -63,7 +63,7 @@ function Sidebar({ setCurrentView }) {
 function SidebarItem({ icon, label, onClick }) {
   return (
     <div
-      className="flex cursor-pointer items-center rounded-lg px-4 py-3 text-gray-300 hover:bg-[#0ffff1] hover:text-black"
+      className="flex cursor-pointer items-center rounded-lg px-4 py-3 text-gray-300 hover:bg-[#8A2BE2] hover:text-black"
       onClick={onClick}
     >
       {icon} <span className="ml-3">{label}</span>

@@ -115,7 +115,7 @@ export default function LandingPage() {
         <div
           className="absolute bottom-[-150px] left-[-10%] right-[-10%] h-[400px] rounded-[100%] opacity-80"
           style={{
-            background: "linear-gradient(180deg, rgba(66, 36, 137, 0.4) 0%, rgba(108, 34, 132, 0.8) 100%)",
+            background: "linear-gradient(180deg, #422489 0%,#6b2284 100%)",
             boxShadow: "0 0 80px 20px rgba(101, 68, 158, 0.67)",
           }}
         />

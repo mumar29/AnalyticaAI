@@ -1,7 +1,9 @@
 import base64
 import csv
 import io
+import json
 import os
+import re
 import tempfile
 from urllib.parse import urlparse
 import uuid
@@ -9,7 +11,7 @@ import cloudinary.uploader
 from matplotlib import pyplot as plt
 import pandas as pd
 import psycopg2
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from context_storage import CURRENT_ORG_ID
 from database_provider import DatabaseProvider
 from llm_provider import LLMProvider
@@ -498,3 +500,103 @@ def generate_completion(system_prompt: str, user_content: str, response_schema: 
     org_id = CURRENT_ORG_ID.get()
 
     return LLMProvider.generate_completion(org_id, system_prompt, user_content, response_schema)
+
+def extract_json(response: str) -> str:
+    """
+    Extract the first JSON object from the response string.
+    This function uses a simple brace matching approach.
+    """
+    brace_count = 0
+    start_idx = None
+    for i, char in enumerate(response):
+        if char == '{':
+            if brace_count == 0:
+                start_idx = i
+            brace_count += 1
+        elif char == '}':
+            brace_count -= 1
+            if brace_count == 0 and start_idx is not None:
+                return response[start_idx:i+1].strip()
+    return response.strip()
+
+def post_process_response(response: str, expected_root_key: Optional[str] = None) -> str:
+    """
+    Extracts a valid JSON object from the response string.
+    If 'expected_root_key' is given and not present in the parsed JSON object,
+    then the JSON is wrapped in a dict with that key.
+    """
+    json_str = extract_json(response)
+    try:
+        data = json.loads(json_str)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse JSON: {e}")
+
+    # If an expected root key is defined but missing, then wrap the JSON.
+    if expected_root_key and (not isinstance(data, dict) or expected_root_key not in data):
+        # Here you can decide if you need to wrap it in a list.
+        # For your TablesRetrieved case, the schema expects a key "tables" with a list of queries.
+        # So if the data looks like a single TableQuery, wrap it in a list.
+        data = {expected_root_key: data if isinstance(data, list) else [data]}
+
+    return json.dumps(data, indent=2)
+
+def get_sample_value(prop_schema: Dict[str, Any]) -> Any:
+    if 'enum' in prop_schema:
+        return prop_schema['enum'][0]
+    
+    if 'anyOf' in prop_schema:
+        for sub in prop_schema['anyOf']:
+            if 'enum' in sub:
+                return sub['enum'][0]
+            type_value = sub.get('type')
+            if type_value == 'string':
+                return "sample"
+            elif type_value == 'boolean':
+                return True
+            elif type_value == 'integer':
+                return 0
+            elif type_value == 'number':
+                return 0.0
+            elif type_value == 'object':
+                return {}
+        return None
+
+    type_value = prop_schema.get('type')
+    if type_value == 'string':
+        return "sample"
+    elif type_value == 'boolean':
+        return True
+    elif type_value == 'integer':
+        return 0
+    elif type_value == 'number':
+        return 0.0
+    elif type_value == 'object':
+        return {}
+    elif type_value == 'array':
+        return []
+    return None
+
+def generate_model_example_from_schema(schema: Dict[str, Any]) -> str:
+    properties = schema.get("properties", {})
+    example = {}
+    for field, prop_schema in properties.items():
+        example[field] = get_sample_value(prop_schema)
+    return json.dumps(example, indent=2)
+
+def attach_both_schema_and_example_to_prompt(
+    system_prompt: str,
+    model_json_schema: Dict[str, Any],
+    schema_header: str = "The response must follow the JSON schema below:",
+    example_header: str = "Here is an example of the expected JSON output:"
+) -> str:
+    full_schema = json.dumps(model_json_schema, indent=2)
+    example = generate_model_example_from_schema(model_json_schema)
+    instruction = f"\n\n{schema_header}\n{full_schema}\n\n{example_header}\n{example}\n"
+    return system_prompt + instruction
+
+def extract_json_from_response(text: str) -> str:
+    # Extract text between json ...  or just  ... 
+    match = re.search(r"(?:json)?\s*(\{.*?\})\s*", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return text.strip()

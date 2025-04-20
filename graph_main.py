@@ -33,6 +33,8 @@ from utils import execute_query, generate_charts_images, get_website_identifier,
 import cloudinary_config
 from websocket_manager import manager
 from redis_config import get_redis_client
+from fastapi.middleware.cors import CORSMiddleware
+
 
 redis_client = get_redis_client()
 
@@ -1117,6 +1119,14 @@ async def delete_user_endpoint(
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow frontend requests
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
+)   
 
 app.include_router(router, prefix="/api/v1")
 

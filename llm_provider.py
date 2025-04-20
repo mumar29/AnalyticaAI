@@ -16,12 +16,12 @@ class LLMConnection(BaseModel):
                 raise ValueError("api_key is required for GEMINI or GROQ provider")
             if self.model is None:
                 # Set default model based on provider
-                self.__dict__["model"] = "gemini-2.0-flash" if self.provider == "GEMINI" else "llama-3.3-70b-versatile"
+                self._dict_["model"] = "gemini-2.0-flash" if self.provider == "GEMINI" else "llama-3.3-70b-versatile"
         elif self.provider == "OLLAMA":
             if not self.host:
                 raise ValueError("host is required for OLLAMA provider")
             if self.model is None:
-                self.__dict__["model"] = "gemma3:1b"
+                self._dict_["model"] = "gemma3:1b"
         return self
     
 class LLMProvider:
@@ -116,7 +116,7 @@ class LLMProvider:
         
         try:
             if config.provider == "GROQ":
-                system_prompt_with_schema = f"""{system_prompt}\nReturn your answer as a JSON object strictly following this schema:\n{json.dumps(response_schema, indent=2)}"""
+                system_prompt_with_schema = f"""{system_prompt}\nReturn your answer as a JSON object following this schema:\n{json.dumps(response_schema, indent=2)}"""
                 
                 chat_completion = client.chat.completions.create(
                     model=config.model,
@@ -130,16 +130,22 @@ class LLMProvider:
 
             elif config.provider == "GEMINI":
                 from google.genai import types
+                from utils import attach_both_schema_and_example_to_prompt, extract_json_from_response
+
+                final_prompt = attach_both_schema_and_example_to_prompt(system_prompt, response_schema)
+                
+                print(f"Final prompt: {final_prompt}")
+                
                 chat_completion = client.models.generate_content(
                     model=config.model,
                     contents=user_content,
                     config=types.GenerateContentConfig(
-                        system_instruction=system_prompt,
-                        response_mime_type='application/json',
-                        response_schema=response_schema,
+                        system_instruction=final_prompt
                     )
                 )
-                return chat_completion.text
+                # from utils import post_process_response
+                return extract_json_from_response(chat_completion.text)
+                # return chat_completion.text
 
             elif config.provider == "OLLAMA":
                 chat_completion = client.chat(
